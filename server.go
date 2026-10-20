@@ -263,6 +263,24 @@ func (c *Catalog) handler() http.Handler {
 			c.serveThumbnail(w, r)
 		case "/image":
 			c.serveImage(w, r)
+		case "/admin-guide.html":
+			w.Header().Set("Cache-Control", "no-store")
+			if !c.authenticated(r) {
+				http.Error(w, "Please sign in as an administrator in Card Atlas, then open the Admin guide again.", http.StatusUnauthorized)
+				return
+			}
+			source, err := assets.ReadFile("static/admin-guide.md")
+			var page []byte
+			if err == nil {
+				page, err = renderAdminGuide(source)
+			}
+			if err != nil {
+				recordError(w, err)
+				http.Error(w, "Could not open the Admin guide. Close this window and try again.", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(page)
 		case "/", "/app.js", "/style.css":
 			static.ServeHTTP(w, r)
 		default:

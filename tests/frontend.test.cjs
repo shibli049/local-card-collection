@@ -476,3 +476,38 @@ test('unexpected UI errors do not expose technical property or parser messages',
   assert.match(a.read('userErrorMessage(SyntaxError("Unexpected token"))'),/Reload the page/);
   assert.equal(a.read('userErrorMessage(Error("Choose another destination."))'),'Choose another destination.');
 });
+
+test('admin guide menu is available after sign-in and closes on sign-out', async () => {
+  const a=app();
+  vm.runInContext('canEdit=false; applyAccess();',a.context);
+  assert.equal(a.get('adminGuideOpen').hidden,true);
+  vm.runInContext('canEdit=true; applyAccess(); api=async(url)=>({authenticated:true}); load=async()=>{};',a.context);
+  assert.equal(a.get('adminGuideOpen').hidden,false);
+  await a.get('adminGuideOpen').onclick();
+  assert.equal(a.get('adminGuideDialog').open,true);
+  assert.equal(a.get('adminGuideFrame').getAttribute('src'),'/admin-guide.html');
+  await a.get('signOut').onclick();
+  assert.equal(a.get('adminGuideOpen').hidden,true);
+  assert.equal(a.get('adminGuideDialog').open,false);
+  assert.equal(a.get('adminGuideFrame').getAttribute('src'),null);
+});
+
+test('expired sessions show sign-in instead of opening the admin guide', async () => {
+  const a=app();
+  vm.runInContext('api=async()=>({authenticated:false});',a.context);
+  await a.get('adminGuideOpen').onclick();
+  assert.equal(a.get('adminGuideDialog').open,false);
+  assert.equal(a.get('loginDialog').open,true);
+  assert.equal(a.get('adminGuideOpen').hidden,true);
+});
+
+test('closing admin guide releases its content and keeps the library state', async () => {
+  const a=app();
+  vm.runInContext('folder="Selected album"; page=3; api=async()=>({authenticated:true});',a.context);
+  await a.get('adminGuideOpen').onclick();
+  a.get('adminGuideClose').onclick();
+  assert.equal(a.get('adminGuideDialog').open,false);
+  assert.equal(a.get('adminGuideFrame').getAttribute('src'),null);
+  assert.equal(a.read('folder'),'Selected album');
+  assert.equal(a.read('page'),3);
+});

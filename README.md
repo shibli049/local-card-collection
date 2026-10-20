@@ -93,7 +93,7 @@ The migration reads the old SQLite file without modifying it, imports descriptio
 
 ## Build macOS and Windows downloads from a Mac
 
-Building requires Go 1.24 or newer. The server uses the Go standard library with no external dependencies or C compiler. The interface is embedded into each executable.
+Building requires Go 1.24 or newer. The server is written in Go and uses Goldmark to render the admin guide from Markdown. No C compiler is needed. The interface is embedded into each executable.
 
 Run from the project directory:
 

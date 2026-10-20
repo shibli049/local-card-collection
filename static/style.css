@@ -50,3 +50,11 @@ aside{display:flex;flex-direction:column;padding-bottom:20px}.brand{flex-shrink:
   #detailDialog .preview { flex: none; height: 28vh; min-height: 140px; }
   #descriptionForm { overflow: visible; }
 }
+
+.admin-help { flex-shrink: 0; text-align: left; margin-bottom: 16px; }
+#adminGuideDialog { width: min(940px, 96vw); height: min(820px, 92dvh); max-height: 92dvh; padding: 0; overflow: hidden; }
+#adminGuideDialog[open] { display: flex; flex-direction: column; }
+.guide-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #e0e7e2; flex-shrink: 0; }
+.guide-head h2 { margin: 0; font-size: 18px; }
+#adminGuideFrame { width: 100%; flex: 1; min-height: 0; border: 0; background: white; }
+@media (max-width: 620px) { .admin-help { margin: 14px 0 0; align-self: flex-start; } }

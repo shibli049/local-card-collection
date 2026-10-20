@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Atlas admin guide</title>
+<style>
+:root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #2d4436; background: white; line-height: 1.65; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 26px 32px 48px; }
+article { max-width: 740px; margin: auto; }
+h1 { font-size: 27px; line-height: 1.25; margin: 0 0 12px; }
+h2 { font-size: 20px; line-height: 1.35; margin: 0 0 12px; }
+h3 { font-size: 16px; margin: 20px 0 6px; }
+p { margin: 10px 0; }
+h2 { padding-top: 26px; margin-top: 22px; border-top: 1px solid #e2e9e3; scroll-margin-top: 18px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 22px 0; padding: 16px; background: #f2f6f1; border-radius: 10px; }
+a { color: #21725e; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid #21725e; outline-offset: 4px; }
+ol, ul { padding-left: 24px; }
+li { margin: 8px 0; }
+blockquote { margin: 18px 0; background: #f2f6f1; border-left: 3px solid #51836a; padding: 12px 16px; border-radius: 4px; }
+code { font-size: .92em; overflow-wrap: anywhere; }
+@media (max-width: 560px) { body { padding: 22px 18px 36px; } h1 { font-size: 24px; } nav { gap: 10px 16px; } }
+</style>
+</head>
+<body>
+<article>
+<nav aria-label="Guide topics">{{range .Topics}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}</nav>
+{{.Content}}
+</article>
+</body>
+</html>
