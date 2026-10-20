@@ -10,7 +10,7 @@ const vm = require('node:vm');
 function app() {
   class Element {
     constructor() {
-      this.value = ''; this.files = []; this.open = false;
+      this.dataset = {}; this.value = ''; this.files = []; this.open = false;
       this.children = []; this.listeners = new Map(); this.classes = new Set();
       this.classList = {add: name => this.classes.add(name), remove: name => this.classes.delete(name), toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name)};
     }
@@ -133,4 +133,153 @@ test('CSV album selector defaults to all albums independently of current filters
   const boxLabel = a.get('exportAlbums').children[1];
   boxLabel.children[0].checked = true; boxLabel.children[0].onchange();
   assert.deepEqual(a.read('[...exportSelection]'), ['Box']);
+});
+
+test('multiple tags are trimmed and deduplicated without losing display case', () => {
+  const a = app(); a.get('tagsInput').value = ' Rare, Japanese, rare, , Foil ';
+  assert.deepEqual(a.read('selectedTags()'), ['Rare', 'Japanese', 'Foil']);
+});
+test('card names and multiple tags are visible on public cards', () => {
+  const a = app(); vm.runInContext('canEdit = false;', a.context);
+  const item = {path:'Cards/file.png', folder:'Cards', filename:'file.png', name:'Blue Eyes Dragon', tags:['Rare','Japanese'], page:null,row:null,col:null,description:'',price:''};
+  vm.runInContext(`var namedCard = card(${JSON.stringify(item)});`, a.context);
+  assert.equal(a.read('namedCard.children[1].children[1].textContent'), 'Blue Eyes Dragon');
+  assert.deepEqual(a.read("namedCard.children[1].children.find(node => node.className === 'badges card-tags').children.map(node => node.textContent)"), ['Rare','Japanese']);
+});
+
+test('cards do not create image elements until previews are explicitly enabled', () => {
+  const a = app();
+  vm.runInContext("var deferred = thumbnail({path:'photo.png', filename:'photo.png'});", a.context);
+  assert.equal(a.read('showPreviews'), false);
+  assert.equal(a.read('deferred.children[0].textContent'), '▧ View image');
+  assert.equal(a.read('browsingAlbums'), true);
+});
+test('album overview and navigation stay bounded for a large directory', () => {
+  const a = app();
+  // The album API provides at most 50 folders per page.
+  vm.runInContext("state = {mode:'albums', albumCount:2000, folders:Array.from({length:50},(_,i)=>({path:'Album '+i,count:25})),items:[]}; renderNavigation(); renderLibrary();", a.context);
+  assert.equal(a.get('albumNav').children.length, 41);
+  assert.equal(a.get('library').children[0].children.length, 50);
+});
+test('export renders only 50 album choices even when selecting every album', () => {
+  const a = app();
+  vm.runInContext("state={folders:[]}; exportDirectory=Array.from({length:2000},(_,i)=>({path:'Album '+i,count:25})); exportSelection=new Set(exportDirectory.map(a=>a.path)); renderExportSelection();", a.context);
+  assert.equal(a.get('exportAlbums').children.length, 50);
+  assert.equal(a.get('exportSummary').textContent, '2000 albums selected · 50000 cards');
+});
+
+test('thumbnails default on for selected albums and searches below 100, with no album overview downloads', () => {
+  const a=app();
+  a.get('search').value='rare';
+  assert.equal(a.read('automaticPreviews({mode:"images",total:99})'),true);
+  assert.equal(a.read('automaticPreviews({mode:"images",total:100})'),false);
+  vm.runInContext('folder="Album";',a.context);
+  assert.equal(a.read('automaticPreviews({mode:"slots",total:50000})'),true);
+  assert.equal(a.read('automaticPreviews({mode:"albums",total:50})'),false);
+  vm.runInContext('state={mode:"albums",folders:[]};',a.context);
+  a.get('showPreviews').checked=false; a.get('showPreviews').onchange();
+  assert.equal(a.read('previewPreference'),false);
+});
+test('only admins can drag cards, and card drags are separate from file imports', () => {
+  const a=app();
+  vm.runInContext('var item={path:"Album/a.jpg",folder:"Album",filename:"a.jpg",page:1,row:1,col:1,description:""}; var dragCard=card(item);',a.context);
+  const data=new Map();
+  a.context.dragEvent={dataTransfer:{setData:(type,value)=>data.set(type,value)}};
+  vm.runInContext('dragCard.dispatch("dragstart",dragEvent);',a.context);
+  assert.equal(data.get('application/x-card-atlas'),'Album/a.jpg');
+  assert.equal(a.read('movingCard.path'),'Album/a.jpg');
+  assert.equal(a.get('moveTools').hidden,false);
+  assert.equal(a.get('importDialog').open,false);
+  a.get('cancelMove').onclick(); assert.equal(a.read('movingCard'),null);
+  vm.runInContext('canEdit=false; var publicCard=card(item);',a.context);
+  assert.equal(a.read('publicCard.draggable'),false);
+});
+test('only administrators request empty album pages and cells', () => {
+  const a = app();
+  vm.runInContext('browsingAlbums=false; folder="Album"; view="organized"; sheet="";', a.context);
+  assert.equal(a.read('slotView()'), true);
+  vm.runInContext('canEdit=false;', a.context);
+  assert.equal(a.read('slotView()'), false);
+  vm.runInContext('canEdit=true;', a.context);
+  assert.equal(a.read('slotView()'), true);
+});
+
+test('boxes cannot open album layout and album tiles identify their type', () => {
+  const a = app();
+  vm.runInContext('folder="Box"; browsingAlbums=false; state={folders:[{path:"Box",count:1,album:{mode:"box"}}]}; applyAccess();', a.context);
+  assert.equal(a.get('layoutOpen').hidden, true);
+  a.get('layoutOpen').onclick();
+  assert.equal(a.get('layoutDialog').open, false);
+  vm.runInContext('state={mode:"albums",folders:[{path:"Box",count:1,album:{mode:"box"}},{path:"Album",count:1,album:{mode:"paged",pages:1,rows:1,columns:1}}]}; renderLibrary();', a.context);
+  assert.equal(a.read('document.getElementById("library").children[0].children[0].children[1].textContent'), '📦 Box');
+  assert.equal(a.read('document.getElementById("library").children[0].children[1].children[1].textContent'), '📖 Album');
+});
+
+test('admin selection persists across views and transfers only after confirmation', async () => {
+  const a=app();
+  vm.runInContext('browsingAlbums=false; state={items:[{path:"Source/a.jpg",folder:"Source",filename:"a.jpg",page:null,row:null,col:null,tags:[]}],folders:[]}; var calls=[]; api=async (url,data)=>{calls.push({url,data}); return {folders:[{path:"Source",album:{mode:"box"}},{path:"Destination",album:{mode:"paged"}}]};}; load=async()=>{};',a.context);
+  a.get('selectImages').onclick();
+  vm.runInContext('activateImage(state.items[0]);',a.context);
+  assert.equal(a.read('selectedImages.size'),1);
+  assert.equal(a.get('detailDialog').open,false);
+  assert.equal(a.get('transferOpen').disabled,false);
+  await a.get('transferOpen').onclick();
+  assert.equal(a.get('transferDialog').open,true);
+  assert.equal(a.read('calls.filter(call=>call.url==="/api/transfer").length'),0);
+  a.get('transferDestination').value='Destination';
+  a.get('transferDestination').onchange();
+  assert.match(a.get('transferSummary').textContent,/Move 1 selected image to Destination/);
+  a.get('transferCancel').onclick();
+  assert.equal(a.read('calls.filter(call=>call.url==="/api/transfer").length'),0);
+  await a.get('transferOpen').onclick();
+  a.get('transferDestination').value='Destination';
+  await a.get('transferForm').onsubmit({preventDefault(){}});
+  assert.deepEqual(a.read('calls.filter(call=>call.url==="/api/transfer")[0].data'),{paths:['Source/a.jpg'],destination:'Destination'});
+  assert.equal(a.read('selectedImages.size'),0);
+  assert.equal(a.get('transferDialog').open,false);
+});
+
+test('signing out clears multi-selection and hides its controls', () => {
+  const a=app();
+  vm.runInContext('browsingAlbums=false; selectingImages=true; selectedImages.set("a",{path:"a"}); canEdit=false; applyAccess();',a.context);
+  assert.equal(a.get('selectionTools').hidden,true);
+  assert.equal(a.read('selectedImages.size'),0);
+  assert.equal(a.read('selectingImages'),false);
+});
+
+test('album deletion requires confirmation and is hidden from non-admin users', async () => {
+  const a=app();
+  vm.runInContext('folder="Box"; browsingAlbums=false; state={folders:[{path:"Box",count:2,album:{mode:"box"}}]}; var calls=[]; api=async(url,data)=>{calls.push({url,data});return {folders:state.folders};}; load=async()=>{}; applyAccess();',a.context);
+  assert.equal(a.get('deleteAlbumOpen').hidden,false);
+  await a.get('deleteAlbumOpen').onclick();
+  assert.equal(a.get('deleteAlbumDialog').open,true);
+  assert.match(a.get('deleteAlbumSummary').textContent,/Box.*2 photos/);
+  assert.equal(a.read('calls.filter(call=>call.url==="/api/delete-album").length'),0);
+  a.get('deleteAlbumCancel').onclick();
+  assert.equal(a.read('calls.filter(call=>call.url==="/api/delete-album").length'),0);
+  await a.get('deleteAlbumOpen').onclick();
+  await a.get('deleteAlbumForm').onsubmit({preventDefault(){}});
+  assert.deepEqual(a.read('calls.filter(call=>call.url==="/api/delete-album")[0].data'),{folder:'Box'});
+  assert.equal(a.get('deleteAlbumDialog').open,false);
+  vm.runInContext('canEdit=false; applyAccess();',a.context);
+  assert.equal(a.get('deleteAlbumOpen').hidden,true);
+});
+
+test('sparse pages render empty cells at their physical coordinates', () => {
+  const a=app();
+  vm.runInContext('state={mode:"slots",items:[],slots:[{page:2,row:3,col:1},{page:2,row:3,col:2}]}; var slotLibrary=document.createElement("section"); renderSlots(slotLibrary);',a.context);
+  assert.equal(a.read('slotLibrary.children.length'),1);
+  assert.equal(a.read('slotLibrary.children[0].children[0].children[0].textContent'),'Page 2');
+  assert.equal(a.read('slotLibrary.children[0].children[1].children[0].textContent'),'ROW 3');
+  assert.equal(a.read('slotLibrary.children[0].children[1].children[1].children.length'),2);
+  assert.equal(a.read('slotLibrary.children[0].children[1].children[1].children[1].children[0].textContent'),'COLUMN 2');
+});
+
+test('album covers request thumbnails even when card previews are off', () => {
+  const a=app();
+  vm.runInContext('showPreviews=false; var cover=thumbnail({path:"Album/first.png",filename:"first.png",revision:"r1"},true);',a.context);
+  assert.equal(a.read('cover.children.length'),2);
+  assert.equal(a.read('cover.children[1].loading'),'lazy');
+  assert.match(a.read('cover.children[1].src'),/^\/thumbnail\?/);
+  assert.equal(a.read('showPreviews'),false);
 });

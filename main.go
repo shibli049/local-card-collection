@@ -48,6 +48,11 @@ func run() error {
 			return err
 		}
 	}
+	if *folder == "" && catalog.data.Root != "" && !catalog.data.Portable {
+		if _, err = catalog.scan(""); err != nil {
+			return err
+		}
+	}
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil && *port == 8765 {
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
@@ -55,8 +60,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	address := "http://" + listener.Addr().String()
-	fmt.Printf("Card Atlas: %s\nCatalog: %s\nKeep this window open. Press Ctrl+C to stop.\n", address, catalog.file)
+	address := fmt.Sprintf("http://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+	fmt.Printf("Card Atlas: %s\nKeep this window open. Press Ctrl+C to stop.\n", address)
+	if catalog.data.Root != "" {
+		fmt.Printf("Catalog: %s\n", catalog.file)
+	} else {
+		fmt.Println("Choose an image folder in the app to store its catalog.")
+	}
 	if !*noBrowser {
 		go func() {
 			if err := openBrowser(address); err != nil {

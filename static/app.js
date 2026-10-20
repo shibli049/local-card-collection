@@ -6,9 +6,102 @@ const el = (tag, text, cls) => {
   return node;
 };
 let canEdit = false;
-let page = 1, state, selected, request = 0, folder = '', sheet = '', view = 'organized', importing = false;
+let deletingAlbum = false, albumToDelete = '';
+async function openDeleteAlbum(path) {
+  if (!canEdit || !path || path === '.' || deletingAlbum) return;
+  try {
+    const directory = await api('/api/images?browse=albums&all=1');
+    if (!canEdit) return;
+    const affected = directory.folders.filter(album => album.path === path || album.path.startsWith(path + '/'));
+    if (!affected.length) { notify('Album no longer exists. Reload the collection.', true); return; }
+    albumToDelete = path;
+    const count = affected.reduce((sum,album) => sum + album.count, 0);
+    $('deleteAlbumSummary').textContent = `Delete “${folderName(path)}” with ${count} photo${count === 1 ? '' : 's'}${affected.length > 1 ? ` across ${affected.length} albums / boxes, including nested folders` : ''}?`;
+    $('deleteAlbumError').textContent = ''; $('deleteAlbumDialog').showModal();
+  } catch (error) { notify(error.message,true); }
+}
+$('deleteAlbumOpen').onclick = () => openDeleteAlbum(folder);
+$('deleteAlbumCancel').onclick = () => { if (!deletingAlbum) $('deleteAlbumDialog').close(); };
+$('deleteAlbumDialog').addEventListener('cancel', event => { if (deletingAlbum) event.preventDefault(); });
+$('deleteAlbumForm').onsubmit = async event => {
+  event.preventDefault(); if (!canEdit || !albumToDelete || deletingAlbum) return;
+  deletingAlbum = true; $('deleteAlbumConfirm').disabled = true; $('deleteAlbumCancel').disabled = true;
+  try {
+    await api('/api/delete-album', {folder:albumToDelete});
+    $('deleteAlbumDialog').close(); selectedImages.clear(); selectingImages=false; cancelMove();
+    folder=''; sheet=''; page=1; browsingAlbums=true; $('albumSearch').value=''; $('search').value='';
+    await load(); notify('Album deleted. Files are kept in the local recovery folder.');
+  } catch (error) { $('deleteAlbumError').textContent=error.message; }
+  finally { deletingAlbum=false; $('deleteAlbumConfirm').disabled=false; $('deleteAlbumCancel').disabled=false; }
+};
+let selectingImages = false, transferring = false;
+const selectedImages = new Map();
+function updateSelectionTools() {
+  $('selectionTools').hidden = !canEdit || browsingAlbums;
+  $('selectImages').textContent = selectingImages ? 'Done selecting' : 'Select images';
+  $('selectImages').setAttribute('aria-pressed', String(selectingImages));
+  for (const id of ['selectVisible', 'clearSelection', 'transferOpen']) $(id).hidden = !selectingImages;
+  $('transferOpen').textContent = `Move selected (${selectedImages.size})…`;
+  $('transferOpen').disabled = !selectedImages.size;
+}
+function selectImage(item) {
+  if (selectedImages.has(item.path)) selectedImages.delete(item.path);
+  else if (selectedImages.size < 1000) selectedImages.set(item.path, item);
+  else notify('Select up to 1000 images per move.', true);
+  updateSelectionTools(); renderLibrary();
+}
+function activateImage(item) {
+  if (canEdit && selectingImages) selectImage(item);
+  else if (movingCard && canEdit) moveTo(item.folder, slotOf(item), item.path);
+  else openDetail(item);
+}
+$('selectImages').onclick = () => { selectingImages = !selectingImages; cancelMove(); if (!selectingImages) selectedImages.clear(); updateSelectionTools(); renderLibrary(); };
+$('selectVisible').onclick = () => { for (const item of state.items) { if (selectedImages.size >= 1000) break; selectedImages.set(item.path,item); } updateSelectionTools(); renderLibrary(); };
+$('clearSelection').onclick = () => { selectedImages.clear(); updateSelectionTools(); renderLibrary(); };
+function updateTransferSummary() {
+  const destination = $('transferDestination').value;
+  $('transferSummary').textContent = `Move ${selectedImages.size} selected image${selectedImages.size === 1 ? '' : 's'} to ${destination ? folderName(destination) : 'the selected destination'}?`;
+  $('transferConfirm').disabled = !destination || !selectedImages.size || transferring;
+}
+$('transferDestination').onchange = updateTransferSummary;
+$('transferOpen').onclick = async () => {
+  if (!canEdit || !selectedImages.size || transferring) return;
+  try {
+    const directory = await api('/api/images?browse=albums&all=1');
+    if (!canEdit || !selectedImages.size) return;
+    const sources = new Set([...selectedImages.values()].map(item => item.folder));
+    const destinations = directory.folders.filter(album => !sources.has(album.path));
+    $('transferDestination').replaceChildren(new Option('Choose a destination', ''), ...destinations.map(album => new Option((album.album?.mode === 'box' ? '📦 ' : '📖 ') + folderName(album.path), album.path)));
+    $('transferDestination').value = '';
+    $('transferImages').replaceChildren(...[...selectedImages.values()].map(item => el('li', `${item.name || item.filename} · ${folderName(item.folder)}`)));
+    $('transferError').textContent = destinations.length ? '' : 'No other albums or boxes are available. Create a destination first.';
+    updateTransferSummary(); $('transferDialog').showModal();
+  } catch (error) { notify(error.message, true); }
+};
+$('transferCancel').onclick = () => { if (!transferring) $('transferDialog').close(); };
+$('transferDialog').addEventListener('cancel', event => { if (transferring) event.preventDefault(); });
+$('transferForm').onsubmit = async event => {
+  event.preventDefault();
+  if (!canEdit || !selectedImages.size || !$('transferDestination').value || transferring) return;
+  const paths = [...selectedImages.keys()], destination = $('transferDestination').value;
+  transferring = true; updateTransferSummary(); $('transferCancel').disabled = true; $('transferDestination').disabled = true; $('transferError').textContent = '';
+  try {
+    await api('/api/transfer', {paths, destination});
+    selectedImages.clear(); selectingImages = false; $('transferDialog').close();
+    folder = destination; sheet = ''; page = 1; browsingAlbums = false; $('search').value = '';
+    await load(); notify(`Moved ${paths.length} images to ${folderName(destination)}.`);
+  } catch (error) { $('transferError').textContent = error.message; }
+  finally { transferring = false; $('transferCancel').disabled = false; $('transferDestination').disabled = false; updateTransferSummary(); updateSelectionTools(); }
+};
+let movingCard = null, arranging = false, previewPreference = null;
+const cardDragType = 'application/x-card-atlas';
+const slotOf = item => ({page:item.page || 0,row:item.row || 0,col:item.col || 0});
+const currentAlbum = () => state?.folders.find(f => f.path === folder)?.album;
+const slotView = () => canEdit && !browsingAlbums && !!folder && view === 'organized' && !$('search').value.trim() && sheet !== 'none';
+let browsingAlbums = true, showPreviews = false, listController;
+let page = 1, state, selected, request = 0, folder = '', sheet = '', view = 'grid', importing = false;
 try { view = localStorage.getItem('libraryView') || view; } catch {}
-if (!['organized', 'grid', 'table'].includes(view)) view = 'organized';
+if (!['grid', 'table', 'organized'].includes(view)) view = 'grid';
 async function api(url, data) {
   const response = await fetch(url, data === undefined ? {} : {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
@@ -19,6 +112,7 @@ async function api(url, data) {
 }
 const imageUrl = (path, revision = '') => '/image?path=' + encodeURIComponent(path) + '&v=' + encodeURIComponent(revision);
 const folderName = path => path === '.' ? 'Root folder' : path;
+function automaticPreviews(data) { return data.mode !== 'albums' && (!!folder || (!!$('search').value.trim() && data.total < 100)); }
 function applyAccess() {
   $('accessMode').textContent = canEdit ? 'Signed in as administrator' : 'Search-only access';
   for (const id of ['importOpen', 'rescan', 'exportOpen']) $(id).hidden = !canEdit;
@@ -26,8 +120,13 @@ function applyAccess() {
   $('signIn').hidden = canEdit; $('signOut').hidden = !canEdit; $('viewerNotice').hidden = canEdit;
   $('emptyImport').hidden = !canEdit || !!state?.count;
   $('emptySignIn').hidden = canEdit || !!state?.count;
-  $('priceField').hidden = !canEdit; $('price').readOnly = !canEdit; $('detailPrice').hidden = canEdit || !selected?.price; $('description').readOnly = !canEdit; $('description').placeholder = canEdit ? 'What should you remember about this image?' : 'No description'; $('saveButton').hidden = !canEdit;
-  if (!canEdit) { $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
+  $('nameField').hidden = !canEdit; $('cardName').disabled = !canEdit; $('tagsField').hidden = !canEdit; $('priceField').hidden = !canEdit; $('price').readOnly = !canEdit; $('detailPrice').hidden = canEdit || !selected?.price; $('description').readOnly = !canEdit; $('description').placeholder = canEdit ? 'What should you remember about this image?' : 'No description'; $('saveButton').hidden = !canEdit;
+  $('pickMove').hidden = !canEdit;
+  $('layoutOpen').hidden = !canEdit || !folder || browsingAlbums || currentAlbum()?.mode !== 'paged';
+  $('deleteAlbumOpen').hidden = !canEdit || !folder || folder === '.' || browsingAlbums;
+  $('moveTools').hidden = !canEdit || !movingCard;
+  if (!canEdit) { selectingImages=false; selectedImages.clear(); movingCard=null; $('deleteAlbumDialog').close(); $('transferDialog').close(); $('layoutDialog').close(); $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
+  updateSelectionTools();
 }
 async function refreshAccess() { const session = await api('/api/session'); canEdit = session.authenticated; applyAccess(); }
 function openLogin() { $('loginError').textContent = ''; $('loginDialog').showModal(); $('username').focus(); }
@@ -50,27 +149,52 @@ function notify(message, isError = false) {
   $('notice').classList.toggle('error', isError);
 }
 function filtersChanged() { page = 1; load(); }
-function chooseFolder(value) { folder = value; sheet = ''; filtersChanged(); }
-function clearFilters() { folder = ''; sheet = ''; $('search').value = ''; filtersChanged(); }
-function thumbnail(item) {
+function chooseFolder(value) { previewPreference=null; if (folder !== value) movingCard=null; browsingAlbums = false; folder = value; sheet = ''; filtersChanged(); }
+function clearFilters() { previewPreference=null; movingCard=null; browsingAlbums = true; $('albumSearch').value = ''; folder = ''; sheet = ''; $('search').value = ''; filtersChanged(); }
+const previewQueue = [];
+let activePreviews = 0;
+function drainPreviews() {
+  while (activePreviews < 4 && previewQueue.length) {
+    const {image, url} = previewQueue.shift();
+    if (!image.isConnected) continue;
+    activePreviews++;
+    const done = () => { activePreviews--; drainPreviews(); };
+    image.onload = done;
+    image.onerror = () => { image.alt = 'Open image to view original'; if (image.dataset.albumCover) image.hidden=true; done(); };
+    image.src = url;
+  }
+}
+const previewObserver = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) {
+    const image = entry.target; previewObserver.unobserve(image);
+    previewQueue.push({image, url:image.dataset.preview}); drainPreviews();
+  }
+}, {rootMargin:'150px'});
+function thumbnail(item, albumCover = false) {
   const container = el('div', undefined, 'thumb');
-  const image = el('img');
-  image.src = imageUrl(item.path,item.revision); image.alt = item.filename; image.loading = 'lazy';
-  image.onerror = () => container.replaceChildren(el('span', 'Preview unavailable'));
+  if (!showPreviews && !albumCover) { container.append(el('span', '▧ View image', 'preview-placeholder')); return container; }
+  if (albumCover) { container.classList.add('album-cover'); container.append(el('span','▱','album-tile-icon')); }
+  const image = el('img'); if (albumCover) image.dataset.albumCover='true'; image.draggable=false; image.alt = item.name || item.filename; image.loading = 'lazy'; image.decoding = 'async';
+  const url = '/thumbnail?' + new URLSearchParams({path:item.path, v:item.revision || ''});
   container.append(image);
+  if (previewObserver) { image.dataset.preview = url; previewObserver.observe(image); }
+  else image.src = url;
   return container;
 }
 function card(item) {
   const button = el('button', undefined, 'card');
-  button.type = 'button'; button.onclick = () => openDetail(item);
+  button.type = 'button'; button.onclick = () => activateImage(item);
+  if (canEdit && selectingImages) { button.setAttribute('aria-pressed', String(selectedImages.has(item.path))); button.classList.toggle('selected-image',selectedImages.has(item.path)); button.append(el('span',selectedImages.has(item.path) ? '✓ Selected' : 'Select image','selection-label')); }
+  wireCardDrag(button,item);
   const body = el('div', undefined, 'card-body');
-  body.append(el('div', '▱ ' + folderName(item.folder), 'folder'), el('h3', item.filename));
+  body.append(el('div', '▱ ' + folderName(item.folder), 'folder'), el('h3', item.name || item.filename));
   const badges = el('div', undefined, 'badges');
   for (const [label, key] of [['Page', 'page'], ['Row', 'row'], ['Col', 'col']]) {
     if (item[key] !== null) badges.append(el('span', `${label} ${item[key]}`, 'badge'));
   }
   if (item.page === null) badges.append(el('span', 'Unpositioned', 'badge'));
   body.append(badges);
+  const tags = el('div', undefined, 'badges card-tags'); for (const tag of item.tags || []) tags.append(el('span', tag, 'tag')); body.append(tags);
   if (item.price) body.append(el('div', item.price, 'price'));
   body.append(el('p', item.description || (canEdit ? 'Add a description…' : 'No description')));
   button.append(thumbnail(item), body);
@@ -79,25 +203,121 @@ function card(item) {
 function renderTable(items) {
   const wrap = el('div', undefined, 'table-wrap'), table = el('table');
   const head = el('thead'), row = el('tr');
-  for (const title of ['Image', 'Filename', 'Album / folder', 'Page', 'Row', 'Column', 'Price', 'Description']) row.append(el('th', title));
+  for (const title of ['Image', 'Name', 'Filename', 'Album / folder', 'Page', 'Row', 'Column', 'Price', 'Description', 'Tags']) row.append(el('th', title));
   head.append(row); table.append(head);
   const body = el('tbody');
   for (const item of items) {
     const row = el('tr'), imageCell = el('td');
     const imageButton = el('button', undefined, 'table-image');
-    imageButton.append(thumbnail(item)); imageButton.onclick = () => openDetail(item); imageButton.setAttribute('aria-label', 'View ' + item.filename); imageCell.append(imageButton);
+    imageButton.append(thumbnail(item)); imageButton.onclick = () => activateImage(item); imageButton.setAttribute('aria-label', (selectingImages && canEdit ? 'Select ' : 'View ') + item.filename); imageCell.append(imageButton);
+    if (canEdit && selectingImages) { row.classList.toggle('selected-image',selectedImages.has(item.path)); imageButton.append(el('span',selectedImages.has(item.path) ? '✓ Selected' : 'Select image')); imageButton.setAttribute('aria-pressed',String(selectedImages.has(item.path))); }
     const nameCell = el('td'), nameButton = el('button', item.filename, 'text-button');
-    nameButton.onclick = () => openDetail(item); nameCell.append(nameButton);
-    row.append(imageCell, nameCell, el('td', folderName(item.folder)), el('td', item.page ?? '—'), el('td', item.row ?? '—'), el('td', item.col ?? '—'), el('td', item.price || '—', 'price'), el('td', item.description || 'No description', 'table-description'));
+    nameButton.onclick = () => activateImage(item); nameCell.append(nameButton);
+    row.append(imageCell, el('td', item.name || item.filename), nameCell, el('td', folderName(item.folder)), el('td', item.page ?? '—'), el('td', item.row ?? '—'), el('td', item.col ?? '—'), el('td', item.price || '—', 'price'), el('td', item.description || 'No description', 'table-description'), el('td', (item.tags || []).join(', ')));
     body.append(row);
   }
   table.append(body); wrap.append(table); return wrap;
 }
+function wireCardDrag(node,item) {
+  node.draggable = canEdit && !selectingImages;
+  if (!canEdit || selectingImages) return;
+  node.title = 'Drag to an empty cell to move, or onto a photo to swap';
+  node.addEventListener('dragstart',event => {
+    if (arranging) { event.preventDefault(); return; }
+    movingCard=item; event.dataTransfer.setData(cardDragType,item.path); event.dataTransfer.effectAllowed='move';
+    $('moveTools').hidden=false; $('moveHint').textContent=`Moving ${item.name || item.filename}. Drop onto a cell, or navigate to another page and click a destination.`;
+  });
+  wireDrop(node,item.folder,slotOf(item),item.path);
+}
+function wireDrop(node,path,slot,target='') {
+  if (!canEdit) return;
+  node.addEventListener('dragover',event => {
+    if (!movingCard || movingCard.folder!==path || ![...(event.dataTransfer?.types || [])].includes(cardDragType)) return;
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect='move'; node.classList.add('move-over');
+  });
+  node.addEventListener('dragleave',()=>node.classList.remove('move-over'));
+  node.addEventListener('drop',event => {
+    if (![...(event.dataTransfer?.types || [])].includes(cardDragType)) return;
+    event.preventDefault(); event.stopPropagation(); node.classList.remove('move-over');
+    moveTo(path,slot,target);
+  });
+}
+async function moveTo(path,destination,target='') {
+  if (!canEdit || !movingCard || arranging) return;
+  if (movingCard.folder!==path) { notify('Choose a cell in the same album.',true); return; }
+  if (target===movingCard.path) { cancelMove(); return; }
+  arranging=true;
+  try {
+    await api('/api/arrange',{path:movingCard.path,target,destination,expected:slotOf(movingCard)});
+    cancelMove(); await load(); notify(target ? 'Photos swapped. Saved locally.' : 'Photo moved. Saved locally.');
+  } catch(e) { cancelMove(); notify(e.message,true); await load(); }
+  finally { arranging=false; }
+}
+function cancelMove() { movingCard=null; $('moveTools').hidden=true; }
+$('cancelMove').onclick=cancelMove;
+$('pickMove').onclick=()=> {
+  if (!canEdit || !selected || !canLeaveDetail()) return;
+  movingCard=selected; $('detailDialog').close(); $('preview').removeAttribute('src');
+  $('moveTools').hidden=false; $('moveHint').textContent=`Moving ${selected.name || selected.filename}. Choose a page, then click an empty cell or photo to swap.`;
+};
+$('layoutOpen').onclick=()=> {
+  if (!canEdit || currentAlbum()?.mode !== 'paged') return;
+  const a=currentAlbum(); $('layoutPages').value=a?.pages || 1; $('layoutRows').value=a?.rows || 3; $('layoutColumns').value=a?.columns || 3;
+  $('layoutError').textContent=''; $('layoutDialog').showModal();
+};
+$('cancelLayout').onclick=()=>$('layoutDialog').close();
+$('layoutForm').onsubmit=async event=> {
+  event.preventDefault(); if (!canEdit) return; $('saveLayout').disabled=true;
+  try { await api('/api/layout',{folder,album:{mode:'paged',pages:Number($('layoutPages').value),rows:Number($('layoutRows').value),columns:Number($('layoutColumns').value)}}); $('layoutDialog').close(); sheet=''; page=1; await load(); notify('Album layout saved. Empty positions are ready to use.'); }
+  catch(e) { $('layoutError').textContent=e.message; }
+  finally { $('saveLayout').disabled=false; }
+};
+function renderSlots(library) {
+  const pages=new Map();
+  const occupied=new Map();
+  const key=s=>`${s.page}/${s.row}/${s.col}`;
+  for (const item of state.items) { const k=key(slotOf(item)); if (!occupied.has(k)) occupied.set(k,[]); occupied.get(k).push(item); }
+  for (const slot of state.slots || []) {
+    if (!pages.has(slot.page)) pages.set(slot.page,new Map());
+    const rows=pages.get(slot.page); if (!rows.has(slot.row)) rows.set(slot.row,[]); rows.get(slot.row).push(slot);
+  }
+  for (const [number,rows] of pages) {
+    const section=el('section',undefined,'page-group'), heading=el('div',undefined,'page-heading');
+    heading.append(el('h3','Page '+number),el('span','Empty positions are shown')); section.append(heading);
+    for (const [number,slots] of rows) {
+      const row=el('div',undefined,'position-row'),grid=el('div',undefined,'row-images'); row.append(el('div','ROW '+number,'row-label'));
+      for (const slot of slots) {
+        const cell=el('div',undefined,'position-cell'); cell.append(el('div','COLUMN '+slot.col,'column-label'));
+        const items=occupied.get(key(slot)) || [];
+        if (items.length) items.forEach(item=>cell.append(card(item)));
+        else {
+          const empty=el('button',canEdit ? 'Empty cell · drop or move photo here' : 'Empty cell','empty-cell'); empty.type='button';
+          empty.setAttribute('aria-label',`Empty cell: page ${slot.page}, row ${slot.row}, column ${slot.col}`);
+          empty.onclick=()=>moveTo(folder,slot); wireDrop(empty,folder,slot); cell.append(empty);
+        }
+        grid.append(cell);
+      }
+      row.append(grid); section.append(row);
+    }
+    library.append(section);
+  }
+}
 function renderLibrary() {
-  const library = $('library'); library.replaceChildren();
+  const library = $('library'); if (previewObserver) previewObserver.disconnect(); previewQueue.length = 0; library.replaceChildren();
   document.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
   $('sort').disabled = view === 'organized';
   if (!state) return;
+  if (state.mode === 'albums') {
+    const grid = el('div', undefined, 'album-grid');
+    for (const album of state.folders) {
+      const button = el('button', undefined, 'album-tile'); button.type = 'button';
+      button.append(album.cover ? thumbnail(album.cover,true) : el('div', album.album?.mode === 'box' ? '□' : '▱', 'album-tile-icon'), el('h2',(album.album?.mode === 'box' ? '📦 ' : '📖 ') + folderName(album.path)),el('p',`${album.count} cards`));
+      if (album.album?.mode === 'paged') button.append(el('span',`${album.album.pages} pages · ${album.album.rows} × ${album.album.columns}`, 'badge'));
+      button.onclick = () => chooseFolder(album.path); grid.append(button);
+    }
+    library.append(grid); return;
+  }
+  if (state.mode === 'slots') { renderSlots(library); return; }
   if (view === 'table') { library.append(renderTable(state.items)); return; }
   if (view === 'grid') {
     const grid = el('div', undefined, 'grid'); state.items.forEach(item => grid.append(card(item))); library.append(grid); return;
@@ -143,47 +363,62 @@ function renderLibrary() {
 }
 function renderNavigation() {
   const nav = $('albumNav'); nav.replaceChildren();
-  for (const item of state.folders) {
+  for (const item of state.folders.slice(0, 40)) {
     const button = el('button', undefined, 'album-link');
     button.classList.toggle('active', folder === item.path); button.title = folderName(item.path);
     button.setAttribute('aria-current', folder === item.path ? 'true' : 'false');
-    button.append(el('span', (item.album?.mode === 'box' ? '□ ' : '▱ ') + folderName(item.path)), el('span', String(item.count), 'album-count'));
+    button.append(el('span', (item.album?.mode === 'box' ? '📦 ' : '📖 ') + folderName(item.path)), el('span', String(item.count), 'album-count'));
     button.onclick = () => chooseFolder(item.path); nav.append(button);
   }
+  if ((state.albumCount || 0) > 40) { const more = el('button', 'Browse all albums →', 'album-link'); more.onclick = clearFilters; nav.append(more); }
   if (!state.folders.length) nav.append(el('p', 'Your albums will appear here.', 'nav-empty'));
   $('allImages').classList.toggle('active', !folder);
 }
 async function load() {
   const id = ++request;
+  if (listController) listController.abort();
+  listController = typeof AbortController === 'undefined' ? null : new AbortController();
   try {
-    const data = await api('/api/images?' + new URLSearchParams({q: $('search').value, folder, sheet, sort: view === 'organized' ? 'position' : $('sort').value, page}));
+    const params = new URLSearchParams({q:browsingAlbums ? $('albumSearch').value : $('search').value, folder, sheet, sort:view === 'organized' ? 'position' : $('sort').value, page, summary:'0'});
+    if (browsingAlbums) params.set('browse','albums');
+    else if (slotView()) params.set('layout','auto');
+    const response = await fetch('/api/images?' + params, listController ? {signal:listController.signal} : {});
+    if (!response.ok) throw Error('Could not load the collection.');
+    const data = await response.json();
     if (id !== request) return;
     state = data; page = data.page;
+    showPreviews = previewPreference ?? automaticPreviews(data);
+    $('showPreviews').checked=showPreviews;
     $('sideCount').textContent = data.count;
     $('rootLabel').textContent = canEdit ? data.root || 'Import photos to create your library, or connect an existing folder.' : 'Local image collection · browse and search';
     $('connect').hidden = !!data.root; $('rescan').disabled = !data.root;
     $('folders').replaceChildren(new Option('All albums & folders', ''), ...data.folders.map(f => new Option(folderName(f.path) + ` (${f.count})`, f.path)));
+    if (folder && !data.folders.some(f => f.path === folder)) $('folders').append(new Option(folderName(folder),folder));
     $('folders').value = folder;
     $('existingAlbums').replaceChildren(...data.folders.map(f => new Option(folderName(f.path), f.path)));
     $('sheets').replaceChildren(new Option('All pages', ''), ...data.pages.map(p => new Option('Page ' + p, p)));
     if (data.unpositioned || sheet === 'none') $('sheets').append(new Option('Without positions / boxes', 'none'));
     if (sheet && ![...$('sheets').options].some(o => o.value === sheet)) $('sheets').append(new Option('Page ' + sheet, sheet));
     $('sheets').value = sheet;
-    $('heading').textContent = folder ? folderName(folder) : 'Card collection.';
+    const albumMode = data.mode === 'albums';
+    $('albumTools').hidden = !albumMode; $('viewControls').hidden = albumMode; $('sheets').hidden = albumMode; $('showPreviews').disabled = albumMode; $('sheets').disabled = albumMode;
+    $('heading').textContent = albumMode ? 'Your albums.' : folder ? folderName(folder) : 'Card collection.';
     const album = data.folders.find(f => f.path === folder)?.album;
     $('subtitle').textContent = album?.mode === 'box' ? 'Box contents, with no page or position numbers.' : album ? `${album.pages} pages · ${album.rows} rows × ${album.columns} columns per page` : 'Your collection, organized your way.';
     $('breadcrumb').textContent = (folder ? folderName(folder) : 'All cards') + (sheet ? ` / ${sheet === 'none' ? 'Without positions' : 'Page ' + sheet}` : '');
     $('resultCount').textContent = `${data.total} image${data.total === 1 ? '' : 's'}${data.total !== data.count ? ' found' : ' in your collection'}`;
     $('resultHint').textContent = view === 'organized' ? 'Grouped by folder → page → row → column' : canEdit ? 'Select an image to view and edit its details' : 'Select an image to view its details';
-    $('empty').hidden = data.total !== 0;
+    if (canEdit && folder && view === 'organized') $('resultHint').textContent = 'Drag a photo to move it; drop onto another photo to swap. Use Album layout to include empty pages.';
+    if (albumMode) { $('resultCount').textContent = `${data.total} albums · ${data.count} cards in your collection`; $('resultHint').textContent = 'Choose an album to load its cards'; }
+    $('empty').hidden = data.mode === 'slots' || data.total !== 0;
     $('empty').querySelector('h2').textContent = data.count ? 'No matching images' : 'Your collection starts here';
     $('empty').querySelector('p').textContent = data.count ? 'Try another search or clear your filters.' : canEdit ? 'Import photos into an album or connect an existing image folder.' : 'There are no photos yet. An administrator can import photos or connect a folder.';
     $('clearFilters').hidden = !data.count; $('emptyImport').hidden = !!data.count;
-    $('pageLabel').textContent = `Results ${data.page} of ${data.pageCount} · up to 60 images per view`;
+    $('pageLabel').textContent = data.mode === 'slots' ? `Positions ${data.page} of ${data.pageCount} · up to 60 cells per view` : albumMode ? `Albums ${data.page} of ${data.pageCount} · up to 50 albums per view` : `Cards ${data.page} of ${data.pageCount} · up to 60 cards per view`;
     $('prev').disabled = data.page === 1; $('next').disabled = data.page >= data.pageCount;
-    $('pagination').hidden = !data.total;
+    $('pagination').hidden = data.mode !== 'slots' && !data.total;
     applyAccess(); renderNavigation(); renderLibrary();
-  } catch (e) { notify(e.message, true); }
+  } catch (e) { if (e.name !== 'AbortError' && id === request) notify(e.message, true); }
 }
 $('connect').onclick = () => { $('folderDialog').showModal(); $('rootInput').focus(); };
 $('cancelFolder').onclick = () => $('folderDialog').close();
@@ -200,7 +435,9 @@ $('rescan').onclick = async () => {
   finally { $('rescan').disabled = false; }
 };
 let timer;
-$('search').oninput = () => { folder = ''; sheet = ''; $('folders').value = ''; $('sheets').value = ''; clearTimeout(timer); timer = setTimeout(filtersChanged, 200); };
+$('search').oninput = () => { cancelMove(); previewPreference=null; browsingAlbums = !$('search').value.trim(); folder = ''; sheet = ''; $('folders').value = ''; $('sheets').value = ''; clearTimeout(timer); timer = setTimeout(filtersChanged, 200); };
+$('albumSearch').oninput = () => { browsingAlbums = true; clearTimeout(timer); timer = setTimeout(filtersChanged,200); };
+$('showPreviews').onchange = () => { showPreviews = $('showPreviews').checked; previewPreference=showPreviews; renderLibrary(); };
 $('folders').onchange = () => chooseFolder($('folders').value);
 $('sheets').onchange = () => { sheet = $('sheets').value; filtersChanged(); };
 $('sort').onchange = filtersChanged;
@@ -209,19 +446,21 @@ $('prev').onclick = () => { page--; load(); }; $('next').onclick = () => { page+
 document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => {
   view = button.dataset.view; try { localStorage.setItem('libraryView', view); } catch {} filtersChanged();
 });
-function dirty() { return canEdit && selected && ($('description').value !== selected.description || $('price').value !== (selected.price || '')); }
+function selectedTags() { const seen = new Set(); return $('tagsInput').value.split(',').map(tag => tag.trim()).filter(tag => { const key = tag.toLowerCase(); if (!tag || seen.has(key)) return false; seen.add(key); return true; }); }
+function dirty() { return canEdit && selected && ($('description').value !== selected.description || $('price').value !== (selected.price || '') || $('cardName').value !== (selected.name || '') || JSON.stringify(selectedTags()) !== JSON.stringify(selected.tags || [])); }
 function canLeaveDetail() { return !dirty() || confirm('Discard your unsaved changes?'); }
 function openDetail(item) {
-  selected = item; $('detailName').textContent = item.filename;
+  selected = item; $('detailName').textContent = item.name || item.filename; $('cardName').value = item.name || ''; $('tagsInput').value = (item.tags || []).join(', '); $('detailTags').replaceChildren(...(item.tags || []).map(tag => el('span',tag,'tag')));
   $('preview').src = imageUrl(item.path,item.revision); $('preview').alt = item.filename; $('original').href = imageUrl(item.path,item.revision);
-  $('price').value = item.price || ''; $('priceField').hidden = !canEdit; $('detailPrice').textContent = item.price || ''; $('detailPrice').hidden = canEdit || !item.price; $('description').value = item.description; $('saveStatus').textContent = ''; $('metadata').replaceChildren();
+  $('price').value = item.price || ''; $('nameField').hidden = !canEdit; $('cardName').disabled = !canEdit; $('tagsField').hidden = !canEdit; $('priceField').hidden = !canEdit; $('detailPrice').textContent = item.price || ''; $('detailPrice').hidden = canEdit || !item.price; $('description').value = item.description; $('saveStatus').textContent = ''; $('metadata').replaceChildren();
+  $('pickMove').hidden = !canEdit;
   const album = state.folders.find(f => f.path === item.folder)?.album;
-  for (const [label, value] of [['Folder', folderName(item.folder)], ['Type', album?.mode === 'box' ? 'Box' : item.page !== null ? 'Paged image' : 'Unpositioned image'], ['Page', item.page ?? '—'], ['Row', item.row ?? '—'], ['Column', item.col ?? '—'], ['Path', item.path]]) $('metadata').append(el('dt', label), el('dd', String(value)));
+  for (const [label, value] of [['Filename', item.filename], ['Folder', folderName(item.folder)], ['Type', album?.mode === 'box' ? 'Box' : item.page !== null ? 'Paged image' : 'Unpositioned image'], ['Page', item.page ?? '—'], ['Row', item.row ?? '—'], ['Column', item.col ?? '—'], ['Path', item.path]]) $('metadata').append(el('dt', label), el('dd', String(value)));
   const index = state.items.findIndex(i => i.path === item.path);
   $('detailPrev').disabled = index <= 0; $('detailNext').disabled = index >= state.items.length - 1;
   if (!$('detailDialog').open) $('detailDialog').showModal();
 }
-$('closeDetail').onclick = () => { if (canLeaveDetail()) $('detailDialog').close(); };
+$('closeDetail').onclick = () => { if (canLeaveDetail()) { $('detailDialog').close(); $('preview').removeAttribute('src'); } };
 $('detailDialog').addEventListener('cancel', event => { event.preventDefault(); $('closeDetail').click(); });
 for (const [id, delta] of [['detailPrev', -1], ['detailNext', 1]]) $(id).onclick = () => {
   if (!canLeaveDetail()) return;
@@ -230,7 +469,7 @@ for (const [id, delta] of [['detailPrev', -1], ['detailNext', 1]]) $(id).onclick
 };
 $('descriptionForm').onsubmit = async event => {
   event.preventDefault(); if (!canEdit) return; $('saveButton').disabled = true; $('saveStatus').textContent = 'Saving…';
-  try { const description = $('description').value, price = $('price').value.trim(); await api('/api/description', {path: selected.path, description, price}); selected.description = description; selected.price = price; $('price').value = price; $('saveStatus').textContent = 'Saved locally'; await load(); }
+  try { const description = $('description').value, price = $('price').value.trim(), name = $('cardName').value.trim(), tags = selectedTags(); await api('/api/description', {path: selected.path, description, price, name, tags}); selected.name = name; selected.tags = tags; $('cardName').value = name; $('detailName').textContent = name; $('detailTags').replaceChildren(...tags.map(tag => el('span', tag, 'tag'))); selected.description = description; selected.price = price; $('price').value = price; $('saveStatus').textContent = 'Saved locally'; await load(); }
   catch (e) { $('saveStatus').textContent = e.message; }
   finally { $('saveButton').disabled = false; }
 };
@@ -421,7 +660,7 @@ $('importForm').onsubmit = async event => {
   let failure = ''; importing = true; $('importError').textContent = ''; $('importStatus').textContent = 'Starting import…'; $('importProgress').hidden = false; $('importProgress').value = 0;
   const controls = [...$('importForm').querySelectorAll('input, select, button')]; controls.forEach(control => control.disabled = true);
   try {
-    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; lastAlbumName = null; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
+    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; lastAlbumName = null; browsingAlbums = false; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
   } catch (e) { failure = e.message; }
   finally { importing = false; controls.forEach(control => control.disabled = false); $('importProgress').hidden = true; $('importStatus').textContent = ''; updateImportPreview(); if (failure) $('importError').textContent = failure; }
 };
@@ -429,11 +668,14 @@ window.addEventListener('beforeunload', event => { if (importing || ($('detailDi
 refreshAccess().then(load).catch(error => notify(error.message, true));
 
 // CSV exports always include whole selected albums, not just visible results.
-let exportSelection = new Set();
+let exportSelection = new Set(), exportDirectory = null, exportPage = 1;
+const exportAlbumsAvailable = () => exportDirectory || state?.folders || [];
 function renderExportSelection() {
-  const albums = state?.folders || [];
+  const albums = exportAlbumsAvailable();
+  const visible = albums.filter(a => a.path.toLowerCase().includes($('exportAlbumSearch').value.toLowerCase()));
+  exportPage = Math.max(1, Math.min(exportPage, Math.ceil(visible.length / 50)));
   $('exportAlbums').replaceChildren();
-  for (const album of albums) {
+  for (const album of visible.slice((exportPage-1)*50, exportPage*50)) {
     const label = el('label', undefined, 'export-album');
     const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.checked = exportSelection.has(album.path);
     checkbox.onchange = () => { if (checkbox.checked) exportSelection.add(album.path); else exportSelection.delete(album.path); renderExportSelection(); };
@@ -445,19 +687,25 @@ function renderExportSelection() {
   $('exportDownload').disabled = !exportSelection.size;
   $('exportAll').checked = albums.length > 0 && albums.every(a => exportSelection.has(a.path));
   $('exportAll').indeterminate = exportSelection.size > 0 && !$('exportAll').checked;
+  $('exportPageLabel').textContent = `${exportPage} of ${Math.max(1,Math.ceil(visible.length/50))}`; $('exportPrev').disabled = exportPage === 1; $('exportNext').disabled = exportPage*50 >= visible.length;
 }
-$('exportOpen').onclick = () => {
+$('exportOpen').onclick = async () => {
   if (!canEdit) { openLogin(); return; }
-  exportSelection = new Set((state?.folders || []).map(a => a.path)); renderExportSelection(); $('exportDialog').showModal();
+  try {
+    exportDirectory = null;
+    if ((state?.albumCount || 0) > (state?.folders.length || 0)) { const directory = await api('/api/images?browse=albums&all=1'); exportDirectory = directory.folders; }
+    exportPage = 1; $('exportAlbumSearch').value = ''; exportSelection = new Set(exportAlbumsAvailable().map(a => a.path)); renderExportSelection(); $('exportDialog').showModal();
+  } catch (error) { notify(error.message,true); }
 };
-$('exportAll').onchange = () => { exportSelection = $('exportAll').checked ? new Set((state?.folders || []).map(a => a.path)) : new Set(); renderExportSelection(); };
+$('exportAll').onchange = () => { exportSelection = $('exportAll').checked ? new Set(exportAlbumsAvailable().map(a => a.path)) : new Set(); renderExportSelection(); };
+$('exportAlbumSearch').oninput = () => { exportPage = 1; renderExportSelection(); };
+$('exportPrev').onclick = () => { exportPage--; renderExportSelection(); }; $('exportNext').onclick = () => { exportPage++; renderExportSelection(); };
 $('cancelExport').onclick = () => $('exportDialog').close();
 $('exportForm').onsubmit = async event => {
   event.preventDefault(); if (!canEdit || !exportSelection.size) return;
   try {
     await refreshAccess(); if (!canEdit) { openLogin(); return; }
-    const params = new URLSearchParams(); exportSelection.forEach(album => params.append('album', album));
-    const response = await fetch('/api/export?' + params.toString());
+    const response = await fetch('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({albums:[...exportSelection]})});
     if (!response.ok) { if (response.status === 401) await refreshAccess(); const body = await response.json(); throw Error(body.error || 'Export failed'); }
     const downloadUrl = URL.createObjectURL(await response.blob());
     const link = el('a'); link.href = downloadUrl; link.download = 'CardAtlas-export.csv';

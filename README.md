@@ -6,7 +6,7 @@ Browse image collections by album, page, row and column. Import photos in bulk, 
 
 Unzip the download for your computer, then open `CardAtlas` on macOS or `CardAtlas.exe` on Windows. Your browser opens automatically. Keep the terminal window open while using the app; closing it stops the server.
 
-The executable includes the server and browser interface. No Python, Go, database installation, or internet connection is needed to use it. It listens on `127.0.0.1`, so only the same computer can connect. Port 8765 is used when available; otherwise the app selects another port and prints the address.
+The executable includes the server and browser interface. No Python, Go, database installation, or internet connection is needed to use it. It listens on `127.0.0.1`, so only the same computer can connect. The browser opens at `http://localhost:8765` by default. Port 8765 is used when available; otherwise the app selects another port and prints the address.
 
 Builds are unsigned. macOS or Windows may display a security prompt. The macOS downloads are standalone console executables, not `.app` bundles. ZIP files preserve the executable permission on macOS.
 
@@ -40,17 +40,29 @@ All conflicts must be resolved before importing. The app checks that destination
 
 An album can have empty positions. Selecting more photos than its capacity is rejected. Limits: 10,000 photos, 50 MiB per photo, and 1 GiB total per import, including upload overhead. Supported extensions are JPG, JPEG, PNG, GIF, WebP, BMP, AVIF and ICO. Browser preview support varies by format. Files are accepted by extension; the app does not convert image formats.
 
-The first import creates an `images` directory beside the local catalog. If you connected an existing image folder first, imported albums are created inside that folder. Originals selected for upload remain unchanged. Failed imports are rolled back during normal operation, including restoration of replaced photos; keep the app running until the import finishes. An unexpected process or power interruption can leave files that require a reload. Incomplete replacement backups may remain in a hidden `.soft-inventory-import-*` directory under the image root; keep these files for recovery rather than deleting them.
+If no folder is connected, the first import creates an `images` directory in the app settings folder, with its catalog stored inside that image root. If you connected an existing image folder first, imported albums are created inside that folder. Originals selected for upload remain unchanged. Failed imports are rolled back during normal operation, including restoration of replaced photos; keep the app running until the import finishes. An unexpected process or power interruption can leave files that require a reload. Incomplete replacement backups may remain in a hidden `.soft-inventory-import-*` directory under the image root; keep these files for recovery rather than deleting them.
 
-Choose an album from the sidebar or folder menu. **Organized** view groups images by folder, page and row, with columns shown in order. Wide rows scroll horizontally. **Grid** shows cards; **Table** shows filenames, positions and descriptions together. The page filter narrows results to a physical image page. Large collections use result pages of 60 images, so a physical page or row can continue on the next result page.
+The library opens with a paged album directory: 50 albums per view. Each album uses its first photo in position order (or saved box order) as a lazy-loaded cover. Use **Find an album**, page through the directory, or choose an album from the sidebar to open its cards. The sidebar is limited to 40 entries; **Browse all albums** opens the complete paged directory. The folder menu contains a small navigation subset, with metadata for albums in the current results. **Organized** view groups images by folder, page and row, with columns shown in order. Wide rows scroll horizontally. **Grid** shows cards; **Table** shows filenames, positions and descriptions together. The page filter narrows results to a physical image page. Large collections use result pages of 60 images, so a physical page or row can continue on the next result page.
 
-Click an image to see its full preview and edit its description, optionally enter a price, then click **Save details**. Prices accept text such as `25.00 SEK` or `$10`, so the currency is explicit. Leave Price blank to remove it. Saved prices are visible on image cards, in the table, and in image details without signing in. Prices survive reloads, restarts, and replacements; a renamed copy starts without a price. Search matches every space-separated term across the relative path, description and position numbers. Typing a search resets album and physical-page filters to **All**, so it searches the whole collection by default. You can then choose an album or page to narrow the results.
+Names are extracted from filenames on import and folder scans: the extension and page-row-column suffix are removed, and hyphens and underscores become spaces. Existing catalogs gain names when opened. Administrators can edit the name without renaming the image file.
+
+Album covers use cached thumbnails and load as they approach the visible area. Thumbnails appear automatically when an album is selected or a search returns fewer than 100 photos. Use **Show thumbnails** to turn previews on or off; they load only as they approach the visible area. Click a card to load its full image; four preview requests and two thumbnail decodes can run at once. JPEG, PNG and GIF previews are resized to at most 320 pixels per side. Other formats, corrupt images, or images larger than 25 megapixels may require opening the original instead. Generated previews are cached in `.card-atlas-cache/thumbnails` inside the image root; reloads exclude that cache from the catalog. The cache is checked every 128 generated previews and pruned from over 256 MiB toward 192 MiB, so it may temporarily exceed the threshold.
+
+Click an image to see its full preview and edit its name and description, optionally enter a price, then click **Save details**. Prices accept text such as `25.00 SEK` or `$10`, so the currency is explicit. Leave Price blank to remove it. Saved prices are visible on image cards, in the table, and in image details without signing in. Add multiple tags separated by commas, such as `Pokémon, Rare, Japanese`. Visitors can see names and tags, and search matches them too. Names and tags survive reloads and replacements; CSV exports join multiple tags with semicolons. Prices survive reloads, restarts, and replacements; a renamed copy starts without a price. Search matches every space-separated term across the relative path, description and position numbers. Typing a search resets album and physical-page filters to **All**, so it searches the whole collection by default. You can then choose an album or page to narrow the results.
+
+### Rearrange photos and show empty positions
+
+Sign in, open an album, and choose **Organized**. For folder imports, the app infers the page, row and column counts from positioned filenames. **Album layout** lets an administrator set the full dimensions, including blank trailing pages or rows. Photos without positions stay available under **Without positions / boxes** until placed.
+
+Drag a photo into an empty cell to move it, or onto another photo in the same album to swap them. For a destination on another page, open the photo, choose **Move photo…**, navigate to the destination page, then click an empty cell or occupied photo. **Cancel move** leaves the arrangement untouched. In a box, dragging onto another photo swaps their display order.
+
+The organized album view includes empty cells and completely empty pages, with at most 60 cells per result page. Positions and box order are saved in `catalog.json`; source filenames stay unchanged. Reloading the folder preserves these arrangements. Imports check the saved positions when detecting conflicts. A positional move fails without changing the catalog if its source or destination changed since the displayed view.
 
 ## Export albums as CSV
 
-Sign in as administrator and click **Export CSV**. Select one or more albums or boxes, or use **Select all albums**, then click **Download CSV**. All albums are selected initially. The export includes every present card in the selected folders, regardless of search filters or result pagination. Visitors without an administrator login cannot export.
+Sign in as administrator and click **Export CSV**. Select one or more albums or boxes, or use **Select all albums**, then click **Download CSV**. All albums are selected initially. The export selector also pages through 50 albums at a time and has its own name filter. Selecting all still selects every album, including albums on other pages. The export includes every present card in the selected folders, regardless of search filters or result pagination. Visitors without an administrator login cannot export.
 
-The download is named `CardAtlas-export.csv` and contains Album, Filename, Page, Row, Column, Description, Price, and Relative path columns. Missing positions and prices are blank. Files are ordered by album and numeric position. Images themselves are not included.
+The download is named `CardAtlas-export.csv` and contains Name, Filename, Album, Page, Row, Column, Price, Description, Tags, and Relative path columns. Missing positions and prices are blank. Files are ordered by album and numeric position. Images themselves are not included.
 
 CSV fields are quoted as needed and encoded as UTF-8 with a byte-order mark for Excel. Text beginning with spreadsheet formula markers is prefixed with an apostrophe so spreadsheet applications treat it as text.
 
@@ -60,7 +72,7 @@ Instead of importing, click **Connect folder** and enter a full local folder pat
 
 Click **Reload from folder** after adding, changing or removing files outside the app. This rescans the entire connected folder and refreshes image previews. Descriptions survive rescans and temporary image removal. Moving or renaming an image changes its identity, so descriptions do not follow a new path automatically.
 
-The catalog is saved in `~/.soft-inventory/catalog.json`, under your user home folder on macOS or Windows. Album dimensions and box types are saved there too. Back up this file and your image folder together. One catalog connects to one root folder. Close one app instance before opening another instance that uses the same catalog.
+The catalog is saved as `catalog.json` directly inside the selected image root folder. It contains card names, descriptions, prices, tags, saved positions, box order, album dimensions and box types. Back up the image root folder to keep images and metadata together. A small `~/.soft-inventory/library-location.json` file remembers the selected root; it contains only the folder location. Reconnecting a folder loads its existing catalog. Moving the whole folder and reconnecting it preserves relative image paths and metadata. Older home-folder catalogs are copied into the image root on reload or startup; the original file remains as a backup. One catalog connects to one root folder. Close one app instance before opening another instance that uses the same catalog.
 
 Advanced launch options:
 
@@ -69,7 +81,7 @@ Advanced launch options:
 ./CardAtlas --no-browser --port 9000
 ```
 
-On Windows, run `CardAtlas.exe` with the same flags. `--data` chooses a separate catalog directory, `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
+On Windows, run `CardAtlas.exe` with the same flags. `--data` chooses a separate settings directory (or an image root already containing a catalog), `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
 
 If you used the earlier Python version, stop it and run the one-time migration before starting this version:
 
@@ -142,3 +154,15 @@ go tool cover -func=coverage.out
 ```
 
 The Tests workflow runs the suite on macOS, Windows and Linux on pushes and pull requests. Its coverage reports are attached to each workflow run. Running the local tests does not require GitHub.
+
+### Large-collection checks
+
+The server caches sorted metadata, album counts, and normalized search text between edits. Album-specific queries use an index for that folder. Searches are debounced and obsolete browser requests are canceled. The scaling tests use 50,000 cards across 2,000 albums and verify bounded responses, index invalidation, thumbnail caching, and cache exclusion during scans.
+
+Run the repeatable metadata benchmarks:
+
+```sh
+go test -run '^$' -bench '^BenchmarkLargeCatalog' -benchmem .
+```
+
+These benchmarks measure a warm in-memory catalog. They exclude startup, image decoding, disk scans, and full catalog saves. JSON metadata still loads into memory at startup and is rewritten on edits; the view optimizations do not change that storage model.

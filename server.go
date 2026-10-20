@@ -86,6 +86,72 @@ func (c *Catalog) handler() http.Handler {
 				return
 			}
 			switch r.URL.Path {
+			case "/api/delete-album":
+				var input struct {
+					Folder string `json:"folder"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if err := c.deleteAlbum(input.Folder); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]bool{"deleted": true})
+			case "/api/transfer":
+				var input struct {
+					Paths       []string `json:"paths"`
+					Destination string   `json:"destination"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if err := c.transfer(input.Paths, input.Destination); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]int{"moved": len(input.Paths)})
+			case "/api/arrange":
+				var input struct {
+					Path        string `json:"path"`
+					Target      string `json:"target"`
+					Destination Slot   `json:"destination"`
+					Expected    Slot   `json:"expected"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if err := c.arrange(input.Path, input.Target, input.Destination, input.Expected); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]bool{"saved": true})
+			case "/api/layout":
+				var input struct {
+					Folder string `json:"folder"`
+					Album  Album  `json:"album"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if err := c.setLayout(input.Folder, input.Album); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]bool{"saved": true})
+			case "/api/export":
+				var input struct {
+					Albums []string `json:"albums"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				c.exportSelectionCSV(w, r, input.Albums)
 			case "/api/import-plan":
 				c.importPlanHTTP(w, r)
 			case "/api/scan":
@@ -104,9 +170,11 @@ func (c *Catalog) handler() http.Handler {
 				writeJSON(w, 200, map[string]int{"count": count})
 			case "/api/description":
 				var input struct {
-					Path        string  `json:"path"`
-					Description *string `json:"description"`
-					Price       *string `json:"price"`
+					Path        string    `json:"path"`
+					Description *string   `json:"description"`
+					Price       *string   `json:"price"`
+					Name        *string   `json:"name"`
+					Tags        *[]string `json:"tags"`
 				}
 				if err := decode(w, r, &input); err != nil {
 					badRequest(w, err)
@@ -116,7 +184,7 @@ func (c *Catalog) handler() http.Handler {
 					badRequest(w, fmt.Errorf("description must be text"))
 					return
 				}
-				if err := c.editDetails(input.Path, *input.Description, input.Price); err != nil {
+				if err := c.editCard(input.Path, *input.Description, input.Price, input.Name, input.Tags); err != nil {
 					badRequest(w, err)
 					return
 				}
@@ -148,11 +216,41 @@ func (c *Catalog) handler() http.Handler {
 		case "/api/images":
 			q := r.URL.Query()
 			page, _ := strconv.Atoi(q.Get("page"))
-			result := c.list(Filters{Query: q.Get("q"), Folder: q.Get("folder"), Sheet: q.Get("sheet"), Sort: q.Get("sort"), Page: page})
+			var result Listing
+			if q.Get("browse") == "albums" {
+				result = c.listAlbums(q.Get("q"), page, q.Get("all") == "1")
+			} else {
+				result = c.list(Filters{Query: q.Get("q"), Folder: q.Get("folder"), Sheet: q.Get("sheet"), Sort: q.Get("sort"), Page: page})
+				if q.Get("layout") != "" {
+					slots, slotErr := c.slotListing(Filters{Folder: q.Get("folder"), Sheet: q.Get("sheet"), Page: page})
+					if slotErr == nil {
+						result = slots
+					} else if q.Get("layout") == "1" {
+						badRequest(w, slotErr)
+						return
+					}
+				}
+
+				if q.Get("summary") == "0" {
+					summaries := result.Folders
+					required := map[string]bool{q.Get("folder"): true}
+					for _, item := range result.Items {
+						required[item.Folder] = true
+					}
+					result.Folders = []FolderSummary{}
+					for i, album := range summaries {
+						if i < 40 || required[album.Path] {
+							result.Folders = append(result.Folders, album)
+						}
+					}
+				}
+			}
 			if !c.authenticated(r) {
 				result.Root = ""
 			}
 			writeJSON(w, 200, result)
+		case "/thumbnail":
+			c.serveThumbnail(w, r)
 		case "/image":
 			c.serveImage(w, r)
 		case "/", "/app.js", "/style.css":

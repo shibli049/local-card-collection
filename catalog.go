@@ -15,16 +15,20 @@ import (
 )
 
 type Image struct {
-	Path        string `json:"path"`
-	Folder      string `json:"folder"`
-	Filename    string `json:"filename"`
-	Page        *int   `json:"page"`
-	Row         *int   `json:"row"`
-	Col         *int   `json:"col"`
-	Description string `json:"description"`
-	Price       string `json:"price"`
-	Present     bool   `json:"present"`
-	Revision    string `json:"revision"`
+	PositionOverride bool     `json:"position_override,omitempty"`
+	Order            int      `json:"order,omitempty"`
+	Path             string   `json:"path"`
+	Folder           string   `json:"folder"`
+	Filename         string   `json:"filename"`
+	Name             string   `json:"name"`
+	Tags             []string `json:"tags"`
+	Page             *int     `json:"page"`
+	Row              *int     `json:"row"`
+	Col              *int     `json:"col"`
+	Description      string   `json:"description"`
+	Price            string   `json:"price"`
+	Present          bool     `json:"present"`
+	Revision         string   `json:"revision"`
 }
 type Album struct {
 	Mode    string `json:"mode"`
@@ -33,16 +37,20 @@ type Album struct {
 	Columns int    `json:"columns"`
 }
 type CatalogData struct {
-	Version int              `json:"version"`
-	Albums  map[string]Album `json:"albums,omitempty"`
-	Root    string           `json:"root"`
-	Images  map[string]Image `json:"images"`
+	Version  int              `json:"version"`
+	Portable bool             `json:"in_image_root,omitempty"`
+	Albums   map[string]Album `json:"albums,omitempty"`
+	Root     string           `json:"root"`
+	Images   map[string]Image `json:"images"`
 }
 type Catalog struct {
-	auth authState
-	mu   sync.RWMutex
-	file string
-	data CatalogData
+	index      *catalogIndex
+	bootstrap  string
+	remembered bool
+	auth       authState
+	mu         sync.RWMutex
+	file       string
+	data       CatalogData
 }
 
 var positionPattern = regexp.MustCompile(`-(\d+)-(\d+)-(\d+)$`)
@@ -52,9 +60,43 @@ func openCatalog(directory string) (*Catalog, error) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, err
 	}
-	c := &Catalog{file: filepath.Join(directory, "catalog.json"), data: CatalogData{Version: 1, Images: map[string]Image{}, Albums: map[string]Album{}}}
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, err
+	}
+	directory, err = filepath.EvalSymlinks(directory)
+	if err != nil {
+		return nil, err
+	}
+	c := &Catalog{bootstrap: directory, file: filepath.Join(directory, "catalog.json"), data: CatalogData{Version: 1, Images: map[string]Image{}, Albums: map[string]Album{}}}
+	if location, err := os.ReadFile(filepath.Join(directory, "library-location.json")); err == nil {
+		var saved struct {
+			Root string `json:"root"`
+		}
+		if err = json.Unmarshal(location, &saved); err != nil {
+			return nil, fmt.Errorf("cannot read library location: %w", err)
+		}
+		if saved.Root == "" {
+			return nil, errors.New("saved library location is empty")
+		}
+		if _, err = os.Stat(saved.Root); err == nil {
+			c.file = filepath.Join(saved.Root, "catalog.json")
+			c.remembered = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		} else {
+			return c, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	raw, err := os.ReadFile(c.file)
 	if errors.Is(err, os.ErrNotExist) {
+		if c.remembered {
+			c.data.Root = filepath.Dir(c.file)
+			c.data.Portable = true
+			return c, nil
+		}
 		if _, oldErr := os.Stat(filepath.Join(directory, "catalog.sqlite3")); oldErr == nil {
 			return nil, errors.New("an older SQLite catalog exists: run python3 migrate_catalog.py first, or choose another --data directory")
 		}
@@ -69,20 +111,28 @@ func openCatalog(directory string) (*Catalog, error) {
 	if c.data.Version != 1 || c.data.Images == nil {
 		return nil, errors.New("unsupported catalog format; file left untouched")
 	}
+	if c.data.Portable {
+		c.data.Root = filepath.Dir(c.file)
+	}
 	if c.data.Albums == nil {
 		c.data.Albums = map[string]Album{}
+	}
+	for key, item := range c.data.Images {
+		if item.Name == "" {
+			item.Name = extractedName(item.Filename, item.Page != nil)
+		}
+		if item.Tags == nil {
+			item.Tags = []string{}
+		}
+		c.data.Images[key] = item
 	}
 	return c, nil
 }
 
 // Persist the whole snapshot before replacing the in-memory state. Failed writes
 // never report success or discard the previous notes.
-func (c *Catalog) commit(data CatalogData) error {
-	raw, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(c.file), ".catalog-*.tmp")
+func atomicCatalogWrite(path string, raw []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".catalog-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -99,10 +149,46 @@ func (c *Catalog) commit(data CatalogData) error {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(name, c.file); err != nil {
+	return os.Rename(name, path)
+}
+func (c *Catalog) commit(data CatalogData) error {
+	target := c.file
+	if data.Root != "" && c.file == filepath.Join(c.bootstrap, "catalog.json") {
+		target = filepath.Join(data.Root, "catalog.json")
+	}
+	data.Portable = data.Root != ""
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
 		return err
 	}
+	previous, readErr := os.ReadFile(target)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	if err = atomicCatalogWrite(target, raw); err != nil {
+		return err
+	}
+	if data.Root != "" && c.bootstrap != data.Root && !c.remembered {
+		location, _ := json.Marshal(struct {
+			Root string `json:"root"`
+		}{data.Root})
+		if err = atomicCatalogWrite(filepath.Join(c.bootstrap, "library-location.json"), location); err != nil {
+			var restoreErr error
+			if readErr == nil {
+				restoreErr = atomicCatalogWrite(target, previous)
+			} else {
+				restoreErr = os.Remove(target)
+			}
+			if restoreErr != nil {
+				return fmt.Errorf("cannot remember library: %v; catalog recovery failed: %w", err, restoreErr)
+			}
+			return fmt.Errorf("cannot remember library location: %w", err)
+		}
+		c.remembered = true
+	}
+	c.file = target
 	c.data = data
+	c.index = nil
 	return nil
 }
 func (c *Catalog) snapshot() CatalogData {
@@ -116,6 +202,17 @@ func (c *Catalog) snapshot() CatalogData {
 		next.Images[k] = v
 	}
 	return next
+}
+func extractedName(filename string, positioned bool) string {
+	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
+	if positioned {
+		stem = positionPattern.ReplaceAllString(stem, "")
+	}
+	name := strings.Join(strings.Fields(strings.NewReplacer("_", " ", "-", " ").Replace(stem)), " ")
+	if name == "" {
+		return filename
+	}
+	return name
 }
 func parsePosition(filename string) (*int, *int, *int) {
 	match := positionPattern.FindStringSubmatch(strings.TrimSuffix(filename, filepath.Ext(filename)))
@@ -177,6 +274,21 @@ func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, det
 		return 0, errors.New("this catalog uses another folder; use --data with another directory for a separate collection")
 	}
 	next := c.snapshot()
+	rootCatalog := filepath.Join(root, "catalog.json")
+	if rootCatalog != c.file {
+		if _, err := os.Stat(rootCatalog); err == nil {
+			if c.data.Root != "" {
+				return 0, errors.New("this image root already contains another catalog; open it using --data with the image root")
+			}
+			existing, err := openCatalog(root)
+			if err != nil {
+				return 0, err
+			}
+			next = existing.snapshot()
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+	}
 	next.Root = root
 	for k, v := range albumUpdate {
 		next.Albums[k] = v
@@ -191,7 +303,7 @@ func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, det
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != root && strings.HasPrefix(entry.Name(), ".soft-inventory-import-") {
+			if path != root && (strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" || entry.Name() == ".card-atlas-trash") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -222,23 +334,72 @@ func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, det
 		if album, ok := next.Albums[filepath.ToSlash(filepath.Dir(relative))]; ok && album.Mode == "box" {
 			page, row, col = nil, nil, nil
 		}
-		next.Images[key] = Image{Path: key, Folder: filepath.ToSlash(filepath.Dir(relative)), Filename: entry.Name(), Page: page, Row: row, Col: col, Description: next.Images[key].Description, Price: next.Images[key].Price, Present: true, Revision: fmt.Sprintf("%x-%x", info.ModTime().UnixNano(), info.Size())}
+		previous := next.Images[key]
+		if previous.PositionOverride {
+			page, row, col = previous.Page, previous.Row, previous.Col
+		}
+		if _, replacing := details[key]; replacing {
+			page, row, col = parsePosition(entry.Name())
+			previous.PositionOverride = false
+			if album, ok := next.Albums[filepath.ToSlash(filepath.Dir(relative))]; ok && album.Mode == "box" {
+				page, row, col = nil, nil, nil
+			}
+		}
+		name := next.Images[key].Name
+		if name == "" {
+			name = extractedName(entry.Name(), page != nil)
+		}
+		tags := next.Images[key].Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		next.Images[key] = Image{PositionOverride: previous.PositionOverride, Order: previous.Order, Name: name, Tags: tags, Path: key, Folder: filepath.ToSlash(filepath.Dir(relative)), Filename: entry.Name(), Page: page, Row: row, Col: col, Description: next.Images[key].Description, Price: next.Images[key].Price, Present: true, Revision: fmt.Sprintf("%x-%x", info.ModTime().UnixNano(), info.Size())}
 		count++
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("scan stopped; previous catalog kept: %w", err)
 	}
+	// Folder connections infer a type once. Unnumbered folders are boxes;
+	// numbered folders retain their physical page layout on future scans.
+	detected := map[string]Album{}
+	for _, item := range next.Images {
+		if !item.Present {
+			continue
+		}
+		if _, saved := next.Albums[item.Folder]; saved {
+			continue
+		}
+		a, exists := detected[item.Folder]
+		if !exists {
+			a.Mode = "box"
+		}
+		s := imageSlot(item)
+		if s.Page > 0 && s.Page <= 1000 && s.Row > 0 && s.Row <= 100 && s.Col > 0 && s.Col <= 100 {
+			a.Mode = "paged"
+			a.Pages, a.Rows, a.Columns = max(a.Pages, s.Page), max(a.Rows, s.Row), max(a.Columns, s.Col)
+		}
+		detected[item.Folder] = a
+	}
+	for folder, album := range detected {
+		next.Albums[folder] = album
+	}
 	for path, details := range details {
 		item := next.Images[path]
 		item.Description = details.Description
 		item.Price = details.Price
+		if details.Name != "" {
+			item.Name = details.Name
+		}
+		item.Tags = details.Tags
 		next.Images[path] = item
 	}
 	return count, c.commit(next)
 }
 
 type imageDetails struct {
+	Name        string
+	Tags        []string
 	Description string
 	Price       string
 }
@@ -247,11 +408,39 @@ func (c *Catalog) describe(path, description string) error {
 	return c.editDetails(path, description, nil)
 }
 func (c *Catalog) editDetails(path, description string, price *string) error {
+	return c.editCard(path, description, price, nil, nil)
+}
+func (c *Catalog) editCard(path, description string, price *string, name *string, tags *[]string) error {
 	if len([]rune(description)) > 20000 {
 		return errors.New("description must be under 20,000 characters")
 	}
 	if price != nil && len([]rune(*price)) > 80 {
 		return errors.New("price must be under 80 characters")
+	}
+	if name != nil && (strings.TrimSpace(*name) == "" || len([]rune(*name)) > 200) {
+		return errors.New("name must contain 1 to 200 characters")
+	}
+	var normalized []string
+	if tags != nil {
+		if len(*tags) > 50 {
+			return errors.New("use up to 50 tags")
+		}
+		seen := map[string]bool{}
+		normalized = []string{}
+		for _, tag := range *tags {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				continue
+			}
+			if len([]rune(tag)) > 60 || strings.ContainsAny(tag, ",\r\n") {
+				return errors.New("each tag must be under 60 characters without commas or line breaks")
+			}
+			key := strings.ToLower(tag)
+			if !seen[key] {
+				normalized = append(normalized, tag)
+				seen[key] = true
+			}
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -261,6 +450,12 @@ func (c *Catalog) editDetails(path, description string, price *string) error {
 	}
 	next := c.snapshot()
 	item.Description = description
+	if name != nil {
+		item.Name = strings.TrimSpace(*name)
+	}
+	if tags != nil {
+		item.Tags = normalized
+	}
 	if price != nil {
 		item.Price = strings.TrimSpace(*price)
 	}
@@ -268,12 +463,21 @@ func (c *Catalog) editDetails(path, description string, price *string) error {
 	return c.commit(next)
 }
 
+type AlbumCover struct {
+	Path     string `json:"path"`
+	Filename string `json:"filename"`
+	Revision string `json:"revision"`
+}
 type FolderSummary struct {
-	Path  string `json:"path"`
-	Count int    `json:"count"`
-	Album *Album `json:"album,omitempty"`
+	Cover *AlbumCover `json:"cover,omitempty"`
+	Path  string      `json:"path"`
+	Count int         `json:"count"`
+	Album *Album      `json:"album,omitempty"`
 }
 type Listing struct {
+	Slots        []Slot          `json:"slots,omitempty"`
+	Mode         string          `json:"mode"`
+	AlbumCount   int             `json:"albumCount"`
 	Items        []Image         `json:"items"`
 	Total        int             `json:"total"`
 	Count        int             `json:"count"`
@@ -315,31 +519,26 @@ func albumPointer(albums map[string]Album, key string) *Album {
 }
 func (c *Catalog) list(filters Filters) Listing { return c.listImages(filters, true) }
 func (c *Catalog) listImages(filters Filters, paginate bool) Listing {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	result := Listing{Items: []Image{}, Folders: []FolderSummary{}, Pages: []int{}, Root: c.data.Root}
-	folders := map[string]int{}
+	index := c.catalogIndex()
+	result := Listing{Mode: "images", AlbumCount: len(index.folders), Items: []Image{}, Folders: index.folders, Pages: []int{}, Root: index.root, Count: len(index.position)}
+	source := index.position
+	if filters.Sort == "name" {
+		source = index.name
+	}
+	if filters.Folder != "" {
+		source = index.byFolder[filters.Folder]
+		if filters.Sort == "name" {
+			source = index.byFolderName[filters.Folder]
+		}
+	}
 	pages := map[int]bool{}
-	matches := []Image{}
+	matches := []*indexedImage{}
 	terms := strings.Fields(strings.ToLower(filters.Query))
-	for _, item := range c.data.Images {
-		if !item.Present {
-			continue
-		}
-		result.Count++
-		folders[item.Folder]++
-		if filters.Folder != "" && filters.Folder != item.Folder {
-			continue
-		}
-		haystack := strings.ToLower(item.Path + " " + item.Description)
-		for _, v := range []*int{item.Page, item.Row, item.Col} {
-			if v != nil {
-				haystack += " " + strconv.Itoa(*v)
-			}
-		}
+	for _, entry := range source {
+		item := entry.image
 		matched := true
 		for _, term := range terms {
-			if !strings.Contains(haystack, term) {
+			if !strings.Contains(entry.search, term) {
 				matched = false
 				break
 			}
@@ -355,46 +554,27 @@ func (c *Catalog) listImages(filters Filters, paginate bool) Listing {
 		if filters.Sheet == "none" && item.Page != nil {
 			continue
 		}
-		if filters.Sheet != "" && filters.Sheet != "none" {
-			if item.Page == nil || strconv.Itoa(*item.Page) != filters.Sheet {
-				continue
-			}
+		if filters.Sheet != "" && filters.Sheet != "none" && (item.Page == nil || strconv.Itoa(*item.Page) != filters.Sheet) {
+			continue
 		}
-		matches = append(matches, item)
+		matches = append(matches, entry)
 	}
-	for folder, count := range folders {
-		result.Folders = append(result.Folders, FolderSummary{Path: folder, Count: count, Album: albumPointer(c.data.Albums, folder)})
-	}
-	slices.SortFunc(result.Folders, func(a, b FolderSummary) int { return strings.Compare(a.Path, b.Path) })
-	for number := range pages {
-		result.Pages = append(result.Pages, number)
+	for page := range pages {
+		result.Pages = append(result.Pages, page)
 	}
 	slices.Sort(result.Pages)
-	slices.SortFunc(matches, func(a, b Image) int {
-		if filters.Sort == "name" {
-			if cmp := strings.Compare(strings.ToLower(a.Filename), strings.ToLower(b.Filename)); cmp != 0 {
-				return cmp
-			}
-		}
-		if cmp := strings.Compare(a.Folder, b.Folder); cmp != 0 {
-			return cmp
-		}
-		for _, pair := range [][2]*int{{a.Page, b.Page}, {a.Row, b.Row}, {a.Col, b.Col}} {
-			if cmp := compareNumber(pair[0], pair[1]); cmp != 0 {
-				return cmp
-			}
-		}
-		return strings.Compare(a.Path, b.Path)
-	})
 	result.Total = len(matches)
 	result.PageCount = max(1, (result.Total+59)/60)
 	result.Page = max(1, min(filters.Page, result.PageCount))
 	if !paginate {
-		result.Items = matches
+		for _, entry := range matches {
+			result.Items = append(result.Items, entry.image)
+		}
 		return result
 	}
 	start := (result.Page - 1) * 60
-	end := min(start+60, result.Total)
-	result.Items = matches[start:end]
+	for _, entry := range matches[start:min(start+60, len(matches))] {
+		result.Items = append(result.Items, entry.image)
+	}
 	return result
 }

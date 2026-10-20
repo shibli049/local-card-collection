@@ -83,6 +83,49 @@ func TestScanSearchAndPersistence(t *testing.T) {
 		t.Fatal("root replacement allowed")
 	}
 }
+
+func TestConnectedFolderTypesAreInferredAndPreserved(t *testing.T) {
+	c := newTestCatalog(t)
+	root := t.TempDir()
+	for _, key := range []string{"Box/plain.jpg", "Album/card-2-3-4.jpg", "Mixed/plain.jpg", "Mixed/card-1-1-1.jpg"} {
+		writeImage(t, root, key)
+	}
+	if _, err := c.scan(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range c.listAlbums("", 1, true).Folders {
+		want := "paged"
+		if folder.Path == "Box" {
+			want = "box"
+		}
+		if folder.Album == nil || folder.Album.Mode != want {
+			t.Fatalf("%s: expected %s, got %+v", folder.Path, want, folder.Album)
+		}
+	}
+	if a := c.data.Albums["Album"]; a != (Album{"paged", 2, 3, 4}) {
+		t.Fatalf("wrong dimensions: %+v", a)
+	}
+	writeImage(t, root, "Box/new-1-1-1.jpg")
+	if _, err := c.scan(root); err != nil {
+		t.Fatal(err)
+	}
+	if c.data.Albums["Box"].Mode != "box" || imageSlot(c.data.Images["Box/new-1-1-1.jpg"]) != (Slot{}) {
+		t.Fatal("rescan converted a box into an album")
+	}
+	if err := c.setLayout("Box", Album{"paged", 1, 1, 1}); err == nil {
+		t.Fatal("inferred box can be converted")
+	}
+	if _, err := c.planImport(ImportReview{Options: ImportOptions{Name: "Box", Mode: "paged", Pages: 1, Rows: 1, Columns: 1}, Files: []string{"new.jpg"}}); err == nil {
+		t.Fatal("import can convert an inferred box")
+	}
+	reopened, err := openCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.data.Albums["Box"].Mode != "box" {
+		t.Fatal("box type was not persisted")
+	}
+}
 func TestPagination(t *testing.T) {
 	c := newTestCatalog(t)
 	root := t.TempDir()
@@ -484,7 +527,7 @@ func TestStaleImportReviewAndReplaceRollback(t *testing.T) {
 		t.Fatal("failed replacement did not restore original")
 	}
 	// Reload includes additions made by other programs, while keeping old notes.
-	c.file = filepath.Join(t.TempDir(), "catalog.json")
+	c.file = filepath.Join(c.data.Root, "catalog.json")
 	if err := c.describe("Box/a.jpg", "Original note"); err != nil {
 		t.Fatal(err)
 	}

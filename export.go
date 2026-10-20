@@ -24,13 +24,16 @@ func csvPosition(value *int) string {
 	return strconv.Itoa(*value)
 }
 func (c *Catalog) exportCSV(w http.ResponseWriter, r *http.Request) {
+	c.exportSelectionCSV(w, r, r.URL.Query()["album"])
+}
+func (c *Catalog) exportSelectionCSV(w http.ResponseWriter, r *http.Request, albums []string) {
 	listing := c.listImages(Filters{}, false)
 	available := map[string]bool{}
 	for _, album := range listing.Folders {
 		available[album.Path] = true
 	}
 	selected := map[string]bool{}
-	for _, album := range r.URL.Query()["album"] {
+	for _, album := range albums {
 		if !available[album] {
 			writeJSON(w, 400, map[string]string{"error": "An album no longer exists. Reload the library and select albums again."})
 			return
@@ -50,14 +53,14 @@ func (c *Catalog) exportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	writer := csv.NewWriter(w)
 	writer.UseCRLF = true
-	if err := writer.Write([]string{"Album", "Filename", "Page", "Row", "Column", "Description", "Price", "Relative path"}); err != nil {
+	if err := writer.Write([]string{"Name", "Filename", "Album", "Page", "Row", "Column", "Price", "Description", "Tags", "Relative path"}); err != nil {
 		return
 	}
 	for _, item := range listing.Items {
 		if !selected[item.Folder] {
 			continue
 		}
-		record := []string{csvText(item.Folder), csvText(item.Filename), csvPosition(item.Page), csvPosition(item.Row), csvPosition(item.Col), csvText(item.Description), csvText(item.Price), csvText(item.Path)}
+		record := []string{csvText(item.Name), csvText(item.Filename), csvText(item.Folder), csvPosition(item.Page), csvPosition(item.Row), csvPosition(item.Col), csvText(item.Price), csvText(item.Description), csvText(strings.Join(item.Tags, "; ")), csvText(item.Path)}
 		if err := writer.Write(record); err != nil {
 			return
 		}

@@ -214,7 +214,7 @@ func (c *Catalog) planImport(review ImportReview) (ImportPlan, error) {
 	slots := map[int][]string{}
 	disk := []diskEntry{}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".soft-inventory-import-") {
+		if strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" {
 			continue
 		}
 		info, err := entry.Info()
@@ -224,6 +224,9 @@ func (c *Catalog) planImport(review ImportReview) (ImportPlan, error) {
 		d := diskEntry{Name: entry.Name(), Size: info.Size(), Modified: info.ModTime().UnixNano(), Regular: info.Mode().IsRegular(), Slot: -1}
 		if o.Mode == "paged" && imageExtensions[strings.ToLower(filepath.Ext(d.Name))] {
 			p, r, col := parsePosition(d.Name)
+			if i, ok := c.data.Images[filepath.ToSlash(filepath.Join(o.Name, d.Name))]; ok && i.PositionOverride {
+				p, r, col = i.Page, i.Row, i.Col
+			}
 			if p != nil && *p >= 1 && *r >= 1 && *r <= o.Rows && *col >= 1 && *col <= o.Columns {
 				if *p > o.Pages {
 					return ImportPlan{}, errors.New("the page count is smaller than an existing image page")
@@ -528,6 +531,8 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range plan.Entries {
 		descriptions := []string{}
 		price := ""
+		cardName := ""
+		tags := []string{}
 		for _, name := range entry.Replaces {
 			original := filepath.Join(destination, name)
 			if _, ok := backups[original]; ok {
@@ -540,6 +545,14 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			backups[original] = backup
 			key := filepath.ToSlash(filepath.Join(o.Name, name))
+			if cardName == "" {
+				cardName = c.data.Images[key].Name
+			}
+			for _, tag := range c.data.Images[key].Tags {
+				if !slices.Contains(tags, tag) {
+					tags = append(tags, tag)
+				}
+			}
 			if value := c.data.Images[key].Price; price == "" && value != "" {
 				price = value
 			}
@@ -572,8 +585,8 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 			rollback(closeErr)
 			return
 		}
-		if len(descriptions) > 0 || price != "" {
-			detailTransfers[filepath.ToSlash(filepath.Join(o.Name, entry.Filename))] = imageDetails{Description: strings.Join(descriptions, "\n\n"), Price: price}
+		if len(descriptions) > 0 || price != "" || cardName != "" || len(tags) > 0 {
+			detailTransfers[filepath.ToSlash(filepath.Join(o.Name, entry.Filename))] = imageDetails{Name: cardName, Tags: tags, Description: strings.Join(descriptions, "\n\n"), Price: price}
 		}
 	}
 	if _, err = c.scanLocked(root, map[string]Album{o.Name: o.album()}, detailTransfers); err != nil {
