@@ -281,7 +281,7 @@ func (c *Catalog) handler() http.Handler {
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(page)
-		case "/", "/app.js", "/style.css":
+		case "/", "/app.js", "/style.css", "/admin-tour.js":
 			static.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)

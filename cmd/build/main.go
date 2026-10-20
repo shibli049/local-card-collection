@@ -41,15 +41,8 @@ func build() error {
 			return err
 		}
 		if target.os == runtime.GOOS && target.arch == runtime.GOARCH {
-			raw, err := os.ReadFile(binary)
-			if err != nil {
-				return err
-			}
 			alias := filepath.Join("dist", target.binary)
-			if err = os.WriteFile(alias, raw, 0755); err != nil {
-				return err
-			}
-			if err = os.Chmod(alias, 0755); err != nil {
+			if err := copyExecutable(binary, alias); err != nil {
 				return err
 			}
 		}
@@ -75,6 +68,38 @@ func build() error {
 	}
 	fmt.Println("Executables and ZIP downloads are ready in dist/.")
 	return nil
+}
+
+// Replace the executable with a new file. Overwriting an existing Mach-O in
+// place can leave macOS using stale code-signature state and killing it at launch.
+func copyExecutable(source, destination string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.CreateTemp(filepath.Dir(destination), ".card-atlas-executable-*")
+	if err != nil {
+		return err
+	}
+	temporary := output.Name()
+	defer os.Remove(temporary)
+	if _, err := io.Copy(output, input); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Chmod(0755); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, destination)
 }
 func addFile(writer *zip.Writer, path string) error {
 	file, err := os.Open(path)

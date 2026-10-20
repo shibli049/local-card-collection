@@ -134,7 +134,7 @@ const folderName = path => path === '.' ? 'Root folder' : path;
 function automaticPreviews(data) { return data.mode !== 'albums' && (!!folder || (!!$('search').value.trim() && data.total < 100)); }
 function applyAccess() {
   $('accessMode').textContent = canEdit ? 'Signed in as administrator' : 'Search-only access';
-  for (const id of ['importOpen', 'rescan', 'exportOpen', 'adminGuideOpen']) $(id).hidden = !canEdit;
+  for (const id of ['importOpen', 'rescan', 'exportOpen', 'adminGuideOpen', 'adminTourOpen']) $(id).hidden = !canEdit;
   $('connect').hidden = !canEdit || !!state?.root;
   $('signIn').hidden = canEdit; $('signOut').hidden = !canEdit; $('viewerNotice').hidden = canEdit;
   $('emptyImport').hidden = !canEdit || !!state?.count;
@@ -144,19 +144,16 @@ function applyAccess() {
   $('layoutOpen').hidden = !canEdit || !folder || browsingAlbums || currentAlbum()?.mode !== 'paged';
   $('deleteAlbumOpen').hidden = !canEdit || !folder || folder === '.' || browsingAlbums;
   $('moveTools').hidden = !canEdit || !movingCard;
-  if (!canEdit) { selectingImages=false; selectedImages.clear(); movingCard=null; closeAdminGuide(); $('deleteAlbumDialog').close(); $('transferDialog').close(); $('layoutDialog').close(); $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
+  if (!canEdit) { window.adminTour?.stop(); selectingImages=false; selectedImages.clear(); movingCard=null; $('deleteAlbumDialog').close(); $('transferDialog').close(); $('layoutDialog').close(); $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
   updateSelectionTools();
 }
 async function refreshAccess() { const session = await api('/api/session'); canEdit = session.authenticated; applyAccess(); }
-function closeAdminGuide() { $('adminGuideDialog').close(); $('adminGuideFrame').removeAttribute('src'); }
-$('adminGuideClose').onclick = closeAdminGuide;
-$('adminGuideDialog').addEventListener('cancel', event => { event.preventDefault(); closeAdminGuide(); });
 $('adminGuideOpen').onclick = async () => {
   if (!canEdit) return;
   try {
     await refreshAccess();
     if (!canEdit) { openLogin(); return; }
-    $('adminGuideFrame').setAttribute('src','/admin-guide.html'); $('adminGuideDialog').showModal();
+    window.location.assign('/admin-guide.html');
   } catch (error) { notify(userErrorMessage(error),true); }
 };
 function openLogin() { $('loginError').textContent = ''; $('loginDialog').showModal(); $('username').focus(); }

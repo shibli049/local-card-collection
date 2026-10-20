@@ -477,37 +477,111 @@ test('unexpected UI errors do not expose technical property or parser messages',
   assert.equal(a.read('userErrorMessage(Error("Choose another destination."))'),'Choose another destination.');
 });
 
-test('admin guide menu is available after sign-in and closes on sign-out', async () => {
+test('admin guide opens as a full page after sign-in', async () => {
   const a=app();
-  vm.runInContext('canEdit=false; applyAccess();',a.context);
+  vm.runInContext('canEdit=false; applyAccess(); var navigatedTo=null; window.location={assign:url=>{navigatedTo=url;}};',a.context);
   assert.equal(a.get('adminGuideOpen').hidden,true);
-  vm.runInContext('canEdit=true; applyAccess(); api=async(url)=>({authenticated:true}); load=async()=>{};',a.context);
+  vm.runInContext('canEdit=true; applyAccess(); api=async()=>({authenticated:true});',a.context);
   assert.equal(a.get('adminGuideOpen').hidden,false);
   await a.get('adminGuideOpen').onclick();
-  assert.equal(a.get('adminGuideDialog').open,true);
-  assert.equal(a.get('adminGuideFrame').getAttribute('src'),'/admin-guide.html');
-  await a.get('signOut').onclick();
-  assert.equal(a.get('adminGuideOpen').hidden,true);
-  assert.equal(a.get('adminGuideDialog').open,false);
-  assert.equal(a.get('adminGuideFrame').getAttribute('src'),null);
+  assert.equal(a.read('navigatedTo'),'/admin-guide.html');
 });
 
-test('expired sessions show sign-in instead of opening the admin guide', async () => {
+test('expired sessions show sign-in instead of navigating to the guide', async () => {
   const a=app();
-  vm.runInContext('api=async()=>({authenticated:false});',a.context);
+  vm.runInContext('var navigatedTo=null; window.location={assign:url=>{navigatedTo=url;}}; api=async()=>({authenticated:false});',a.context);
   await a.get('adminGuideOpen').onclick();
-  assert.equal(a.get('adminGuideDialog').open,false);
+  assert.equal(a.read('navigatedTo'),null);
   assert.equal(a.get('loginDialog').open,true);
   assert.equal(a.get('adminGuideOpen').hidden,true);
 });
 
-test('closing admin guide releases its content and keeps the library state', async () => {
+test('guide connection failure stays on the collection with a helpful message', async () => {
   const a=app();
-  vm.runInContext('folder="Selected album"; page=3; api=async()=>({authenticated:true});',a.context);
+  vm.runInContext('var navigatedTo=null; window.location={assign:url=>{navigatedTo=url;}}; api=async()=>{throw Error("Could not reach Card Atlas.");};',a.context);
   await a.get('adminGuideOpen').onclick();
-  a.get('adminGuideClose').onclick();
-  assert.equal(a.get('adminGuideDialog').open,false);
-  assert.equal(a.get('adminGuideFrame').getAttribute('src'),null);
-  assert.equal(a.read('folder'),'Selected album');
-  assert.equal(a.read('page'),3);
+  assert.equal(a.read('navigatedTo'),null);
+  assert.equal(a.get('notice').textContent,'Could not reach Card Atlas.');
+});
+
+function tourApp() {
+  const a=app();
+  const Element=a.get('body').constructor;
+  Element.prototype.getClientRects=function(){return this.hidden ? [] : [{}];};
+  Element.prototype.getBoundingClientRect=()=>({top:100,bottom:140,left:100,right:220,width:120,height:40});
+  Element.prototype.scrollIntoView=function(){};
+  Element.prototype.contains=function(node){return node===this || this.children.some(child=>child.contains?.(node));};
+  const append=Element.prototype.append;
+  Element.prototype.append=function(...nodes){for(const node of nodes){if(node && typeof node==='object')node.parentElement=this;}append.apply(this,nodes);};
+  Object.defineProperty(Element.prototype,'style',{get(){return this._style || (this._style={});}});
+  Object.defineProperty(Element.prototype,'offsetHeight',{get(){return 260;}});
+  a.document.body=a.get('body');
+  a.document.querySelector=selector=>selector==='dialog[open]' ? ['detailDialog','importDialog','transferDialog','folderDialog'].map(a.get).find(node=>node.open) || null : null;
+  a.document.querySelectorAll=selector=>selector.startsWith('#')?[a.get(selector.slice(1))]:[];
+  vm.runInContext('window.innerWidth=1280; window.innerHeight=720; window.location={search:""}; requestAnimationFrame=fn=>fn(); Option=class {constructor(text,value){this.textContent=text;this.value=value;}};',a.context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/admin-tour.js'),'utf8'),a.context);
+  const panel=a.document.body.children.find(node=>node.className==='admin-tour');
+  return {...a,panel,next:panel.children[5].children[2],skip:panel.children[5].children[1],jump:panel.children[4]};
+}
+
+test('tour waits for real actions and never connects a folder on its own', () => {
+  const a=tourApp();
+  vm.runInContext('var changes=0; api=async()=>{changes++;};',a.context);
+  a.get('adminTourOpen').onclick();
+  assert.equal(a.panel.hidden,false);
+  assert.equal(a.panel.children[1].textContent,'Welcome');
+  a.next.onclick();
+  assert.equal(a.panel.children[1].textContent,'Connect your photo folder');
+  assert.equal(a.next.disabled,true);
+  a.next.onclick();
+  assert.equal(a.panel.children[1].textContent,'Connect your photo folder');
+  assert.equal(a.read('changes'),0);
+  vm.runInContext('state.root="/collection";',a.context);
+  a.document.dispatch('click');
+  assert.equal(a.next.disabled,false);
+  a.next.onclick();
+  assert.equal(a.panel.children[1].textContent,'Browse your albums');
+});
+
+test('tour supports skipping, jumping, and ending without performing destructive actions', () => {
+  const a=tourApp();
+  a.get('adminTourOpen').onclick();
+  a.next.onclick(); a.skip.onclick();
+  assert.equal(a.panel.children[1].textContent,'Browse your albums');
+  const deletion=a.jump.children.find(option=>option.textContent.includes('Read the deletion confirmation'));
+  a.jump.value=deletion.value; a.jump.onchange();
+  assert.match(a.panel.children[2].textContent,/Choose Cancel/);
+  assert.equal(a.get('deleteAlbumDialog').open,false);
+  vm.runInContext('window.adminTour.stop();',a.context);
+  assert.equal(a.panel.hidden,true);
+});
+
+test('tour tips follow controls inside a modal and end when admin access is lost', () => {
+  const a=tourApp();
+  a.get('detailDialog').showModal();a.get('detailDialog').append(a.get('descriptionForm'));
+  a.get('adminTourOpen').onclick();
+  const edit=a.jump.children.find(option=>option.textContent.includes('Edit the details'));
+  a.jump.value=edit.value;a.jump.onchange();
+  assert.equal(a.panel.parentElement,a.get('detailDialog'));
+  assert.equal(a.get('descriptionForm').classes.has('tour-focus'),true);
+  vm.runInContext('canEdit=false; applyAccess();',a.context);
+  assert.equal(a.panel.hidden,true);
+  assert.equal(a.get('descriptionForm').classes.has('tour-focus'),false);
+  assert.equal(a.get('adminTourOpen').hidden,true);
+});
+
+
+test('folder tour follows the path field once the connection window is open', () => {
+  const a=tourApp();
+  a.get('adminTourOpen').onclick();a.next.onclick();
+  a.get('folderDialog').append(a.get('rootInput'));a.get('folderDialog').showModal();
+  a.document.dispatch('click');
+  assert.equal(a.panel.parentElement,a.get('folderDialog'));
+  assert.equal(a.get('rootInput').classes.has('tour-focus'),true);
+  assert.doesNotMatch(a.panel.children[3].textContent,/not available/);
+  let prevented=false;
+  a.document.dispatch('keydown',{key:'Escape',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);
+  assert.equal(a.panel.hidden,true);
+  assert.equal(a.get('folderDialog').open,true);
 });

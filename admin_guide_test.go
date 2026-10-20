@@ -18,7 +18,7 @@ func TestAdminGuideRequiresLoginAndDoesNotStayCachedAfterLogout(t *testing.T) {
 	login := publicCall(c, "POST", "/api/login", `{"username":"admin","password":"Inventory@2026"}`, nil)
 	cookie := login.Result().Cookies()[0]
 	response = publicCall(c, "GET", "/admin-guide.html", "", cookie)
-	if response.Code != 200 || !strings.Contains(response.Body.String(), "Looking after your collection") {
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "Import an existing folder") {
 		t.Fatal("guide unavailable after login", response.Code, response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Type"), "text/html") {
@@ -43,7 +43,7 @@ func TestAdminGuideRendersMarkdownAndBuildsWorkingTopicLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(rendered)
-	for _, expected := range []string{`<h1 id="looking-after-your-collection">`, `<h2 id="add-photos">`, `<ol>`, `<li>`, `<code>catalog.json</code>`, `<blockquote>`} {
+	for _, expected := range []string{`<h1 id="import-an-existing-folder">`, `<h2 id="connect-the-folder">`, `<ol>`, `<li>`, `<code>catalog.json</code>`, `<blockquote>`} {
 		if !strings.Contains(page, expected) {
 			t.Fatal("Markdown was not rendered", expected)
 		}
@@ -52,7 +52,7 @@ func TestAdminGuideRendersMarkdownAndBuildsWorkingTopicLinks(t *testing.T) {
 		t.Fatal("unrendered source shown")
 	}
 	links := regexp.MustCompile(`href="#([^"]+)"`).FindAllStringSubmatch(page, -1)
-	if len(links) != 10 {
+	if len(links) != 5 {
 		t.Fatal("missing guide topics", len(links))
 	}
 	for _, link := range links {

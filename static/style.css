@@ -52,9 +52,14 @@ aside{display:flex;flex-direction:column;padding-bottom:20px}.brand{flex-shrink:
 }
 
 .admin-help { flex-shrink: 0; text-align: left; margin-bottom: 16px; }
-#adminGuideDialog { width: min(940px, 96vw); height: min(820px, 92dvh); max-height: 92dvh; padding: 0; overflow: hidden; }
-#adminGuideDialog[open] { display: flex; flex-direction: column; }
-.guide-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #e0e7e2; flex-shrink: 0; }
-.guide-head h2 { margin: 0; font-size: 18px; }
-#adminGuideFrame { width: 100%; flex: 1; min-height: 0; border: 0; background: white; }
 @media (max-width: 620px) { .admin-help { margin: 14px 0 0; align-self: flex-start; } }
+
+.admin-tour { position: fixed; z-index: 10000; padding: 18px; max-height: calc(100dvh - 24px); overflow: auto; border: 1px solid #b9d6c9; border-radius: 12px; background: white; color: #2d4436; box-shadow: 0 10px 40px #102d3840; text-align: left; }
+.admin-tour h2 { font-size: 17px; margin: 5px 0 9px; }
+.admin-tour p { font-size: 13px; line-height: 1.55; margin: 8px 0; }
+.admin-tour .tour-progress { font-size: 11px; color: #5c7869; margin-top: 0; }
+.admin-tour .tour-hint { font-size: 11px; color: #647c6e; }
+.admin-tour select { width: 100%; max-width: 100%; min-width: 0; margin: 8px 0; padding: 8px; }
+.tour-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.tour-actions button { padding: 8px 10px; font-size: 12px; }
+.tour-focus { outline: 3px solid #23795e !important; outline-offset: 4px; box-shadow: 0 0 0 7px #80d5b33b !important; }
