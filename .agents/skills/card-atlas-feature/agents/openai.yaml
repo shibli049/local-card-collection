@@ -1,0 +1,4 @@
+interface:
+  display_name: "Card Atlas features"
+  short_description: "Add Card Atlas features with tests and user guidance"
+  default_prompt: "Use $card-atlas-feature to implement this Card Atlas feature, update affected guidance and logging, and verify the result."
