@@ -44,6 +44,45 @@ function app() {
 }
 const photo = name => ({name, size: 100, lastModified: 1});
 
+test('unnumbered file-picker imports select box before review and keep filenames', async () => {
+  const a = app();
+  a.get('importFiles').files = [photo('summer.jpg'), photo('portrait.png')];
+  a.get('importFiles').dispatch('change');
+  assert.equal(a.get('albumMode').value, 'box');
+  assert.equal(a.get('dimensions').hidden, true);
+  assert.equal(a.get('startPosition').hidden, true);
+  assert.equal(a.read('importSettings().mode'), 'box');
+  vm.runInContext('var reviewed; api=async(url,body)=>{reviewed=body;return {entries:body.files.map((name,index)=>({index,original:name,filename:name,page:null,row:null,col:null,conflicts:[]})),unresolved:0};};', a.context);
+  await vm.runInContext('reviewImport()', a.context);
+  assert.equal(a.read('reviewed.options.mode'), 'box');
+  assert.deepEqual(a.read('importPlan.entries.map(entry=>entry.filename)'), ['portrait.png','summer.jpg']);
+});
+
+test('automatic type detection updates for dropped photos and respects manual choice', () => {
+  const a = app();
+  a.drop([photo('plain.jpg')]);
+  assert.equal(a.get('albumMode').value, 'box');
+  a.drop([photo('card-2-3-1.jpg')]);
+  assert.equal(a.get('albumMode').value, 'paged');
+  a.get('clearImportFiles').onclick();
+  a.drop([photo('plain.jpg')]);
+  assert.equal(a.get('albumMode').value, 'box');
+  a.get('albumMode').value = 'paged'; a.get('albumMode').dispatch('change');
+  a.drop([photo('another.jpg')]);
+  assert.equal(a.get('albumMode').value, 'paged');
+});
+
+test('automatic type detection preserves an existing destination type', () => {
+  const a = app();
+  vm.runInContext('state.folders=[{path:"Album",album:{mode:"paged",pages:2,rows:2,columns:2}}];', a.context);
+  a.drop([photo('plain.jpg')]);
+  assert.equal(a.get('albumMode').value, 'paged');
+  assert.equal(a.get('albumMode').disabled, true);
+  a.get('albumName').value = 'New box'; a.get('albumName').dispatch('input');
+  assert.equal(a.get('albumMode').value, 'box');
+  assert.equal(a.get('albumMode').disabled, false);
+});
+
 test('drops append photos, open import, and follow natural filename order', () => {
   const a = app();
   assert.equal(a.drop([photo('photo10.png'), photo('photo2.png')]).prevented, true);

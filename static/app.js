@@ -475,7 +475,7 @@ $('descriptionForm').onsubmit = async event => {
 };
 
 // The reviewed order is exactly the order sent to the server.
-let importPhotos = [];
+let importPhotos = [], automaticImportType = true;
 let importPlan = null, importActions = {}, conflictSelection = new Set(), conflictPage = 1, reviewRequest = 0, reviewing = false, lastAlbumName = null;
 function orderedFiles() {
   const files = [...importPhotos];
@@ -514,6 +514,12 @@ function syncAlbumSettings() {
   if (name !== lastAlbumName && existing) {
     $('albumMode').value = existing.mode;
     if (existing.mode === 'paged') { $('importPages').value = existing.pages; $('importRows').value = existing.rows; $('importColumns').value = existing.columns; }
+  }
+  if (!existing && automaticImportType && importPhotos.length) {
+    $('albumMode').value = importPhotos.some(file => {
+      const match = file.name.match(/-(\d+)-(\d+)-(\d+)\.[^.]+$/);
+      return match && Number(match[1]) >= 1 && Number(match[1]) <= 1000 && Number(match[2]) >= 1 && Number(match[2]) <= 100 && Number(match[3]) >= 1 && Number(match[3]) <= 100;
+    }) ? 'paged' : 'box';
   }
   lastAlbumName = name;
   $('albumMode').disabled = !!existing;
@@ -636,6 +642,7 @@ document.addEventListener('drop', event => {
   if (!$('importDialog').open) openImport();
   importPhotos.push(...photos); updateImportPreview();
 });
+$('albumMode').addEventListener('change', () => { automaticImportType = false; });
 for (const id of ['albumName', 'albumMode', 'importPages', 'importRows', 'importColumns', 'startPage', 'startRow', 'startColumn', 'importFiles', 'importOrder']) $(id).addEventListener(['albumMode', 'importFiles', 'importOrder'].includes(id) ? 'change' : 'input', updateImportPreview);
 $('reviewButton').onclick = () => reviewImport();
 $('selectAllConflicts').onchange = () => { conflictSelection.clear(); if ($('selectAllConflicts').checked) importPlan.entries.filter(e => e.conflicts.length).forEach(e => conflictSelection.add(e.index)); renderConflicts(); };
@@ -660,7 +667,7 @@ $('importForm').onsubmit = async event => {
   let failure = ''; importing = true; $('importError').textContent = ''; $('importStatus').textContent = 'Starting import…'; $('importProgress').hidden = false; $('importProgress').value = 0;
   const controls = [...$('importForm').querySelectorAll('input, select, button')]; controls.forEach(control => control.disabled = true);
   try {
-    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; lastAlbumName = null; browsingAlbums = false; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
+    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; automaticImportType = true; lastAlbumName = null; browsingAlbums = false; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
   } catch (e) { failure = e.message; }
   finally { importing = false; controls.forEach(control => control.disabled = false); $('importProgress').hidden = true; $('importStatus').textContent = ''; updateImportPreview(); if (failure) $('importError').textContent = failure; }
 };
