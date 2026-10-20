@@ -56,7 +56,7 @@ func run() error {
 		return err
 	}
 	address := "http://" + listener.Addr().String()
-	fmt.Printf("Soft Inventory: %s\nCatalog: %s\nKeep this window open. Press Ctrl+C to stop.\n", address, catalog.file)
+	fmt.Printf("Card Atlas: %s\nCatalog: %s\nKeep this window open. Press Ctrl+C to stop.\n", address, catalog.file)
 	if !*noBrowser {
 		go func() {
 			if err := openBrowser(address); err != nil {
@@ -69,7 +69,7 @@ func run() error {
 }
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Could not start Soft Inventory:", err)
+		fmt.Fprintln(os.Stderr, "Could not start Card Atlas:", err)
 		if runtime.GOOS == "windows" {
 			fmt.Println("Press Enter to close.")
 			fmt.Scanln()

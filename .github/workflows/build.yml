@@ -15,5 +15,5 @@ jobs:
       - run: go run ./cmd/build
       - uses: actions/upload-artifact@v4
         with:
-          name: SoftInventory-all-platforms
-          path: dist/*.zip
+          name: CardAtlas-all-platforms
+          path: dist/CardAtlas-*.zip

@@ -1,10 +1,10 @@
-# Soft Inventory
+# Card Atlas
 
 Browse image collections by album, page, row and column. Import photos in bulk, keep boxes without position numbers, and search filenames, folder names, positions and editable descriptions. Everything stays on your computer.
 
 ## Open the app
 
-Unzip the download for your computer, then open `SoftInventory` on macOS or `SoftInventory.exe` on Windows. Your browser opens automatically. Keep the terminal window open while using the app; closing it stops the server.
+Unzip the download for your computer, then open `CardAtlas` on macOS or `CardAtlas.exe` on Windows. Your browser opens automatically. Keep the terminal window open while using the app; closing it stops the server.
 
 The executable includes the server and browser interface. No Python, Go, database installation, or internet connection is needed to use it. It listens on `127.0.0.1`, so only the same computer can connect. Port 8765 is used when available; otherwise the app selects another port and prints the address.
 
@@ -12,7 +12,7 @@ Builds are unsigned. macOS or Windows may display a security prompt. The macOS d
 
 ## Administrator and search-only access
 
-The library opens with search-only access. Visitors can browse images, read descriptions, search, and filter by album or page. They cannot import photos, resolve import conflicts, reload the folder, connect another folder, or edit descriptions.
+The library opens with search-only access. Visitors can browse images, read descriptions, search, and filter by album or page. They cannot import photos, resolve import conflicts, reload the folder, connect another folder, or edit descriptions and optional prices.
 
 Click **Administrator sign in** to manage the library. The hardcoded credentials are:
 
@@ -25,8 +25,10 @@ The server enforces these permissions for every catalog mutation. Signing in cre
 
 Sign in, click **Import photos**, enter a new album name or choose an existing one, and choose an organization type:
 
-- **Paged album:** enter the number of pages, rows per page, and columns per row. Select multiple photos, choose the import order, and review the position preview. Photos fill from left to right, then down the rows, then onto the next page. Positions start at 1 by default; choose a starting page, row and column to import into a later part of an album. Imported copies get names such as `photo-2-3-1.jpg` for page 2, row 3, column 1.
+- **Paged album:** enter the number of pages, rows per page, and columns per row. Select multiple photos or drag and drop them into the import window, choose the import order, and review the position preview. Photos fill from left to right, then down the rows, then onto the next page. Positions start at 1 by default; choose a starting page, row and column to import into a later part of an album. Imported copies get names such as `photo-2-3-1.jpg` for page 2, row 3, column 1.
 - **Box:** select photos without page, row or column counts. Copies keep their filenames, except characters unsuitable for filenames are replaced and extensions are normalized. Box photos remain unpositioned even when their original filenames end in numbers.
+
+While signed in, you can also drop photos onto the library to open the import window. Each drop or file-picker selection adds photos to the current selection. Use **Clear selection** to start over. Drop individual photo files; folder drops are rejected. Dropped photos use the same validation, position preview, and conflict review as selected files.
 
 Filename order uses natural sorting, so `photo2.jpg` comes before `photo10.jpg`. Reverse filename order and file picker order are also available. The preview shows the first 100 assignments; all selected files follow that order. Type a new album name or choose an existing album from the name field. When an album is selected in the library, **Import photos** starts with that album selected. Existing paged albums keep their row and column counts; increase **Pages** to add space.
 
@@ -42,7 +44,15 @@ The first import creates an `images` directory beside the local catalog. If you 
 
 Choose an album from the sidebar or folder menu. **Organized** view groups images by folder, page and row, with columns shown in order. Wide rows scroll horizontally. **Grid** shows cards; **Table** shows filenames, positions and descriptions together. The page filter narrows results to a physical image page. Large collections use result pages of 60 images, so a physical page or row can continue on the next result page.
 
-Click an image to see its full preview and edit its description, then click **Save description**. Search matches every space-separated term across the relative path, description and position numbers. Folder and physical-page filters combine with search.
+Click an image to see its full preview and edit its description, optionally enter a price, then click **Save details**. Prices accept text such as `25.00 SEK` or `$10`, so the currency is explicit. Leave Price blank to remove it. Saved prices are visible on image cards, in the table, and in image details without signing in. Prices survive reloads, restarts, and replacements; a renamed copy starts without a price. Search matches every space-separated term across the relative path, description and position numbers. Typing a search resets album and physical-page filters to **All**, so it searches the whole collection by default. You can then choose an album or page to narrow the results.
+
+## Export albums as CSV
+
+Sign in as administrator and click **Export CSV**. Select one or more albums or boxes, or use **Select all albums**, then click **Download CSV**. All albums are selected initially. The export includes every present card in the selected folders, regardless of search filters or result pagination. Visitors without an administrator login cannot export.
+
+The download is named `CardAtlas-export.csv` and contains Album, Filename, Page, Row, Column, Description, Price, and Relative path columns. Missing positions and prices are blank. Files are ordered by album and numeric position. Images themselves are not included.
+
+CSV fields are quoted as needed and encoded as UTF-8 with a byte-order mark for Excel. Text beginning with spreadsheet formula markers is prefixed with an apostrophe so spreadsheet applications treat it as text.
 
 ## Connect existing folders and keep data
 
@@ -55,11 +65,11 @@ The catalog is saved in `~/.soft-inventory/catalog.json`, under your user home f
 Advanced launch options:
 
 ```sh
-./SoftInventory --data ./another-catalog --folder "/path/to/images"
-./SoftInventory --no-browser --port 9000
+./CardAtlas --data ./another-catalog --folder "/path/to/images"
+./CardAtlas --no-browser --port 9000
 ```
 
-On Windows, run `SoftInventory.exe` with the same flags. `--data` chooses a separate catalog directory, `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
+On Windows, run `CardAtlas.exe` with the same flags. `--data` chooses a separate catalog directory, `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
 
 If you used the earlier Python version, stop it and run the one-time migration before starting this version:
 
@@ -84,10 +94,10 @@ The build creates standalone executables and ZIP files in `dist`:
 
 | Download | Target |
 | --- | --- |
-| `SoftInventory-macOS-AppleSilicon.zip` | Macs with Apple Silicon |
-| `SoftInventory-macOS-Intel.zip` | Intel Macs |
-| `SoftInventory-Windows-x64.zip` | Windows x64 |
-| `SoftInventory-Windows-ARM64.zip` | Windows ARM64 |
+| `CardAtlas-macOS-AppleSilicon.zip` | Macs with Apple Silicon |
+| `CardAtlas-macOS-Intel.zip` | Intel Macs |
+| `CardAtlas-Windows-x64.zip` | Windows x64 |
+| `CardAtlas-Windows-ARM64.zip` | Windows ARM64 |
 
 All four builds run on your Mac. A Windows VM and GitHub Actions are not required. The optional GitHub workflow runs the same build command. Windows executables are cross-compiled; launch behavior still needs validation on Windows. These builds are unsigned; distribution with signing or notarization requires the relevant developer credentials.
 
@@ -96,3 +106,39 @@ To run the source during development:
 ```sh
 go run . --no-browser
 ```
+
+## Tests
+
+Run the full suite with race detection:
+
+```sh
+go test -race ./...
+```
+
+Run the focused unit tests or real HTTP integration tests separately:
+
+```sh
+go test -run '^TestUnit' ./...
+go test -run '^TestIntegration' .
+```
+
+Unit tests check position parsing, portable filenames, album dimensions, import starting positions, combined search filters, description limits, catalog format validation, and ZIP contents and executable permissions. The existing catalog and handler tests also cover authentication, rollback, symlink boundaries, and import conflict planning.
+
+Integration tests start real HTTP servers on temporary localhost ports and use HTTP clients with cookie jars. They cover administrator login, public read-only search, multipart imports, image serving and conditional caching, mixed Replace/Rename choices, folder reloads, restart persistence, session invalidation, and interrupted-upload cleanup and retry. All catalogs and photos created by the tests use temporary directories that Go removes after each test.
+
+The drag-and-drop selection tests use Node.js 22 or newer and need no npm packages:
+
+```sh
+node --test tests/frontend.test.cjs
+```
+
+They check adding photos across drops and file-picker selections, natural ordering, clearing the selection, invalidating conflict reviews, folder rejection, and access and upload guards. The Tests workflow runs these checks alongside the Go suite.
+
+To collect statement coverage:
+
+```sh
+go test -race -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out
+```
+
+The Tests workflow runs the suite on macOS, Windows and Linux on pushes and pull requests. Its coverage reports are attached to each workflow run. Running the local tests does not require GitHub.

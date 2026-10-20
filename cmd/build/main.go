@@ -22,10 +22,10 @@ func build() error {
 		return err
 	}
 	for _, target := range []struct{ os, arch, label, binary string }{
-		{"darwin", "arm64", "macOS-AppleSilicon", "SoftInventory"},
-		{"darwin", "amd64", "macOS-Intel", "SoftInventory"},
-		{"windows", "amd64", "Windows-x64", "SoftInventory.exe"},
-		{"windows", "arm64", "Windows-ARM64", "SoftInventory.exe"},
+		{"darwin", "arm64", "macOS-AppleSilicon", "CardAtlas"},
+		{"darwin", "amd64", "macOS-Intel", "CardAtlas"},
+		{"windows", "amd64", "Windows-x64", "CardAtlas.exe"},
+		{"windows", "arm64", "Windows-ARM64", "CardAtlas.exe"},
 	} {
 		directory := filepath.Join("dist", target.label)
 		if err := os.MkdirAll(directory, 0755); err != nil {
@@ -53,7 +53,7 @@ func build() error {
 				return err
 			}
 		}
-		zipFile, err := os.Create(filepath.Join("dist", "SoftInventory-"+target.label+".zip"))
+		zipFile, err := os.Create(filepath.Join("dist", "CardAtlas-"+target.label+".zip"))
 		if err != nil {
 			return err
 		}

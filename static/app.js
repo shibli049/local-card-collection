@@ -21,13 +21,13 @@ const imageUrl = (path, revision = '') => '/image?path=' + encodeURIComponent(pa
 const folderName = path => path === '.' ? 'Root folder' : path;
 function applyAccess() {
   $('accessMode').textContent = canEdit ? 'Signed in as administrator' : 'Search-only access';
-  for (const id of ['importOpen', 'rescan']) $(id).hidden = !canEdit;
+  for (const id of ['importOpen', 'rescan', 'exportOpen']) $(id).hidden = !canEdit;
   $('connect').hidden = !canEdit || !!state?.root;
   $('signIn').hidden = canEdit; $('signOut').hidden = !canEdit; $('viewerNotice').hidden = canEdit;
   $('emptyImport').hidden = !canEdit || !!state?.count;
   $('emptySignIn').hidden = canEdit || !!state?.count;
-  $('description').readOnly = !canEdit; $('description').placeholder = canEdit ? 'What should you remember about this image?' : 'No description'; $('saveButton').hidden = !canEdit;
-  if (!canEdit) { $('importDialog').close(); $('folderDialog').close(); }
+  $('priceField').hidden = !canEdit; $('price').readOnly = !canEdit; $('detailPrice').hidden = canEdit || !selected?.price; $('description').readOnly = !canEdit; $('description').placeholder = canEdit ? 'What should you remember about this image?' : 'No description'; $('saveButton').hidden = !canEdit;
+  if (!canEdit) { $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
 }
 async function refreshAccess() { const session = await api('/api/session'); canEdit = session.authenticated; applyAccess(); }
 function openLogin() { $('loginError').textContent = ''; $('loginDialog').showModal(); $('username').focus(); }
@@ -40,7 +40,7 @@ $('loginForm').onsubmit = async event => {
   finally { $('loginButton').disabled = false; }
 };
 $('signOut').onclick = async () => {
-  if ($('detailDialog').open && dirty() && !confirm('Discard your unsaved description and sign out?')) return;
+  if ($('detailDialog').open && dirty() && !confirm('Discard your unsaved changes and sign out?')) return;
   try { await api('/api/logout', {}); canEdit = false; $('detailDialog').close(); applyAccess(); await load(); notify('Signed out. Search-only access is active.'); }
   catch (e) { notify(e.message, true); }
 };
@@ -70,14 +70,16 @@ function card(item) {
     if (item[key] !== null) badges.append(el('span', `${label} ${item[key]}`, 'badge'));
   }
   if (item.page === null) badges.append(el('span', 'Unpositioned', 'badge'));
-  body.append(badges, el('p', item.description || (canEdit ? 'Add a description…' : 'No description')));
+  body.append(badges);
+  if (item.price) body.append(el('div', item.price, 'price'));
+  body.append(el('p', item.description || (canEdit ? 'Add a description…' : 'No description')));
   button.append(thumbnail(item), body);
   return button;
 }
 function renderTable(items) {
   const wrap = el('div', undefined, 'table-wrap'), table = el('table');
   const head = el('thead'), row = el('tr');
-  for (const title of ['Image', 'Filename', 'Album / folder', 'Page', 'Row', 'Column', 'Description']) row.append(el('th', title));
+  for (const title of ['Image', 'Filename', 'Album / folder', 'Page', 'Row', 'Column', 'Price', 'Description']) row.append(el('th', title));
   head.append(row); table.append(head);
   const body = el('tbody');
   for (const item of items) {
@@ -86,7 +88,7 @@ function renderTable(items) {
     imageButton.append(thumbnail(item)); imageButton.onclick = () => openDetail(item); imageButton.setAttribute('aria-label', 'View ' + item.filename); imageCell.append(imageButton);
     const nameCell = el('td'), nameButton = el('button', item.filename, 'text-button');
     nameButton.onclick = () => openDetail(item); nameCell.append(nameButton);
-    row.append(imageCell, nameCell, el('td', folderName(item.folder)), el('td', item.page ?? '—'), el('td', item.row ?? '—'), el('td', item.col ?? '—'), el('td', item.description || 'No description', 'table-description'));
+    row.append(imageCell, nameCell, el('td', folderName(item.folder)), el('td', item.page ?? '—'), el('td', item.row ?? '—'), el('td', item.col ?? '—'), el('td', item.price || '—', 'price'), el('td', item.description || 'No description', 'table-description'));
     body.append(row);
   }
   table.append(body); wrap.append(table); return wrap;
@@ -167,10 +169,10 @@ async function load() {
     if (data.unpositioned || sheet === 'none') $('sheets').append(new Option('Without positions / boxes', 'none'));
     if (sheet && ![...$('sheets').options].some(o => o.value === sheet)) $('sheets').append(new Option('Page ' + sheet, sheet));
     $('sheets').value = sheet;
-    $('heading').textContent = folder ? folderName(folder) : 'Image library.';
+    $('heading').textContent = folder ? folderName(folder) : 'Card collection.';
     const album = data.folders.find(f => f.path === folder)?.album;
-    $('subtitle').textContent = album?.mode === 'box' ? 'Box contents, with no page or position numbers.' : album ? `${album.pages} pages · ${album.rows} rows × ${album.columns} columns per page` : 'Find the image. Keep the details.';
-    $('breadcrumb').textContent = (folder ? folderName(folder) : 'All images') + (sheet ? ` / ${sheet === 'none' ? 'Without positions' : 'Page ' + sheet}` : '');
+    $('subtitle').textContent = album?.mode === 'box' ? 'Box contents, with no page or position numbers.' : album ? `${album.pages} pages · ${album.rows} rows × ${album.columns} columns per page` : 'Your collection, organized your way.';
+    $('breadcrumb').textContent = (folder ? folderName(folder) : 'All cards') + (sheet ? ` / ${sheet === 'none' ? 'Without positions' : 'Page ' + sheet}` : '');
     $('resultCount').textContent = `${data.total} image${data.total === 1 ? '' : 's'}${data.total !== data.count ? ' found' : ' in your collection'}`;
     $('resultHint').textContent = view === 'organized' ? 'Grouped by folder → page → row → column' : canEdit ? 'Select an image to view and edit its details' : 'Select an image to view its details';
     $('empty').hidden = data.total !== 0;
@@ -198,7 +200,7 @@ $('rescan').onclick = async () => {
   finally { $('rescan').disabled = false; }
 };
 let timer;
-$('search').oninput = () => { clearTimeout(timer); timer = setTimeout(filtersChanged, 200); };
+$('search').oninput = () => { folder = ''; sheet = ''; $('folders').value = ''; $('sheets').value = ''; clearTimeout(timer); timer = setTimeout(filtersChanged, 200); };
 $('folders').onchange = () => chooseFolder($('folders').value);
 $('sheets').onchange = () => { sheet = $('sheets').value; filtersChanged(); };
 $('sort').onchange = filtersChanged;
@@ -207,12 +209,12 @@ $('prev').onclick = () => { page--; load(); }; $('next').onclick = () => { page+
 document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => {
   view = button.dataset.view; try { localStorage.setItem('libraryView', view); } catch {} filtersChanged();
 });
-function dirty() { return canEdit && selected && $('description').value !== selected.description; }
-function canLeaveDetail() { return !dirty() || confirm('Discard your unsaved description?'); }
+function dirty() { return canEdit && selected && ($('description').value !== selected.description || $('price').value !== (selected.price || '')); }
+function canLeaveDetail() { return !dirty() || confirm('Discard your unsaved changes?'); }
 function openDetail(item) {
   selected = item; $('detailName').textContent = item.filename;
   $('preview').src = imageUrl(item.path,item.revision); $('preview').alt = item.filename; $('original').href = imageUrl(item.path,item.revision);
-  $('description').value = item.description; $('saveStatus').textContent = ''; $('metadata').replaceChildren();
+  $('price').value = item.price || ''; $('priceField').hidden = !canEdit; $('detailPrice').textContent = item.price || ''; $('detailPrice').hidden = canEdit || !item.price; $('description').value = item.description; $('saveStatus').textContent = ''; $('metadata').replaceChildren();
   const album = state.folders.find(f => f.path === item.folder)?.album;
   for (const [label, value] of [['Folder', folderName(item.folder)], ['Type', album?.mode === 'box' ? 'Box' : item.page !== null ? 'Paged image' : 'Unpositioned image'], ['Page', item.page ?? '—'], ['Row', item.row ?? '—'], ['Column', item.col ?? '—'], ['Path', item.path]]) $('metadata').append(el('dt', label), el('dd', String(value)));
   const index = state.items.findIndex(i => i.path === item.path);
@@ -228,15 +230,16 @@ for (const [id, delta] of [['detailPrev', -1], ['detailNext', 1]]) $(id).onclick
 };
 $('descriptionForm').onsubmit = async event => {
   event.preventDefault(); if (!canEdit) return; $('saveButton').disabled = true; $('saveStatus').textContent = 'Saving…';
-  try { const description = $('description').value; await api('/api/description', {path: selected.path, description}); selected.description = description; $('saveStatus').textContent = 'Saved locally'; await load(); }
+  try { const description = $('description').value, price = $('price').value.trim(); await api('/api/description', {path: selected.path, description, price}); selected.description = description; selected.price = price; $('price').value = price; $('saveStatus').textContent = 'Saved locally'; await load(); }
   catch (e) { $('saveStatus').textContent = e.message; }
   finally { $('saveButton').disabled = false; }
 };
 
 // The reviewed order is exactly the order sent to the server.
+let importPhotos = [];
 let importPlan = null, importActions = {}, conflictSelection = new Set(), conflictPage = 1, reviewRequest = 0, reviewing = false, lastAlbumName = null;
 function orderedFiles() {
-  const files = [...$('importFiles').files];
+  const files = [...importPhotos];
   if ($('importOrder').value !== 'selection') {
     const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
     files.sort((a, b) => collator.compare(a.name, b.name));
@@ -281,6 +284,8 @@ function syncAlbumSettings() {
   $('existingAlbumHint').hidden = !existing || existing.mode === 'box';
 }
 function renderImportPreview() {
+  $('fileSelectionCount').textContent = importPhotos.length ? `${importPhotos.length} photo${importPhotos.length === 1 ? '' : 's'} selected` : 'No photos selected';
+  $('clearImportFiles').disabled = !importPhotos.length || importing;
   const s = importSettings(), files = orderedFiles(), box = s.mode === 'box';
   $('dimensions').hidden = box; $('startPosition').hidden = box;
   for (const id of ['importPages', 'startPage', 'startRow', 'startColumn']) $(id).disabled = box;
@@ -356,6 +361,42 @@ function openImport() {
 $('importOpen').onclick = openImport; $('emptyImport').onclick = openImport;
 $('cancelImport').onclick = () => { if (!importing) $('importDialog').close(); };
 $('importDialog').addEventListener('cancel', event => { if (importing) event.preventDefault(); });
+$('importFiles').addEventListener('change', () => {
+  if (!canEdit || importing) return;
+  importPhotos.push(...$('importFiles').files);
+  $('importFiles').value = '';
+});
+$('clearImportFiles').onclick = () => { if (!importing) { importPhotos = []; $('importFiles').value = ''; updateImportPreview(); } };
+let dragDepth = 0;
+const draggingFiles = event => [...(event.dataTransfer?.types || [])].includes('Files');
+$('dropZone').addEventListener('dragenter', event => {
+  if (!draggingFiles(event) || !canEdit || importing) return;
+  event.preventDefault(); dragDepth++; $('dropZone').classList.add('drag-over');
+});
+$('dropZone').addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) $('dropZone').classList.remove('drag-over');
+});
+document.addEventListener('dragover', event => {
+  if (!draggingFiles(event)) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = canEdit && !importing ? 'copy' : 'none';
+});
+document.addEventListener('drop', event => {
+  if (!draggingFiles(event)) return;
+  event.preventDefault(); dragDepth = 0; $('dropZone').classList.remove('drag-over');
+  if (!canEdit) { notify('Sign in as administrator to import photos.', true); openLogin(); return; }
+  if (importing) { notify('Wait for the current import to finish before adding photos.', true); return; }
+  const items = [...(event.dataTransfer.items || [])];
+  if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
+    if (!$('importDialog').open) openImport();
+    $('importError').textContent = 'Drop individual photo files, not folders. Select the photos inside the folder and drop them together.';
+    return;
+  }
+  const photos = [...event.dataTransfer.files];
+  if (!photos.length) return;
+  if (!$('importDialog').open) openImport();
+  importPhotos.push(...photos); updateImportPreview();
+});
 for (const id of ['albumName', 'albumMode', 'importPages', 'importRows', 'importColumns', 'startPage', 'startRow', 'startColumn', 'importFiles', 'importOrder']) $(id).addEventListener(['albumMode', 'importFiles', 'importOrder'].includes(id) ? 'change' : 'input', updateImportPreview);
 $('reviewButton').onclick = () => reviewImport();
 $('selectAllConflicts').onchange = () => { conflictSelection.clear(); if ($('selectAllConflicts').checked) importPlan.entries.filter(e => e.conflicts.length).forEach(e => conflictSelection.add(e.index)); renderConflicts(); };
@@ -380,9 +421,46 @@ $('importForm').onsubmit = async event => {
   let failure = ''; importing = true; $('importError').textContent = ''; $('importStatus').textContent = 'Starting import…'; $('importProgress').hidden = false; $('importProgress').value = 0;
   const controls = [...$('importForm').querySelectorAll('input, select, button')]; controls.forEach(control => control.disabled = true);
   try {
-    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); lastAlbumName = null; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
+    const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; lastAlbumName = null; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
   } catch (e) { failure = e.message; }
   finally { importing = false; controls.forEach(control => control.disabled = false); $('importProgress').hidden = true; $('importStatus').textContent = ''; updateImportPreview(); if (failure) $('importError').textContent = failure; }
 };
 window.addEventListener('beforeunload', event => { if (importing || ($('detailDialog').open && dirty())) { event.preventDefault(); event.returnValue = ''; } });
 refreshAccess().then(load).catch(error => notify(error.message, true));
+
+// CSV exports always include whole selected albums, not just visible results.
+let exportSelection = new Set();
+function renderExportSelection() {
+  const albums = state?.folders || [];
+  $('exportAlbums').replaceChildren();
+  for (const album of albums) {
+    const label = el('label', undefined, 'export-album');
+    const checkbox = el('input'); checkbox.type = 'checkbox'; checkbox.checked = exportSelection.has(album.path);
+    checkbox.onchange = () => { if (checkbox.checked) exportSelection.add(album.path); else exportSelection.delete(album.path); renderExportSelection(); };
+    label.append(checkbox, el('span', folderName(album.path)), el('span', `${album.count} cards`, 'album-count'));
+    $('exportAlbums').append(label);
+  }
+  const count = albums.filter(a => exportSelection.has(a.path)).reduce((sum, a) => sum + a.count, 0);
+  $('exportSummary').textContent = `${exportSelection.size} albums selected · ${count} cards`;
+  $('exportDownload').disabled = !exportSelection.size;
+  $('exportAll').checked = albums.length > 0 && albums.every(a => exportSelection.has(a.path));
+  $('exportAll').indeterminate = exportSelection.size > 0 && !$('exportAll').checked;
+}
+$('exportOpen').onclick = () => {
+  if (!canEdit) { openLogin(); return; }
+  exportSelection = new Set((state?.folders || []).map(a => a.path)); renderExportSelection(); $('exportDialog').showModal();
+};
+$('exportAll').onchange = () => { exportSelection = $('exportAll').checked ? new Set((state?.folders || []).map(a => a.path)) : new Set(); renderExportSelection(); };
+$('cancelExport').onclick = () => $('exportDialog').close();
+$('exportForm').onsubmit = async event => {
+  event.preventDefault(); if (!canEdit || !exportSelection.size) return;
+  try {
+    await refreshAccess(); if (!canEdit) { openLogin(); return; }
+    const params = new URLSearchParams(); exportSelection.forEach(album => params.append('album', album));
+    const response = await fetch('/api/export?' + params.toString());
+    if (!response.ok) { if (response.status === 401) await refreshAccess(); const body = await response.json(); throw Error(body.error || 'Export failed'); }
+    const downloadUrl = URL.createObjectURL(await response.blob());
+    const link = el('a'); link.href = downloadUrl; link.download = 'CardAtlas-export.csv';
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000); $('exportDialog').close();
+  } catch (error) { notify(error.message, true); }
+};

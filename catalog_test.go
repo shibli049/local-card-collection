@@ -384,7 +384,8 @@ func TestExistingAlbumReplaceRenameAndNotes(t *testing.T) {
 	if r := bulkRequest(t, c, "album=Album&mode=paged&pages=2&rows=2&columns=2", []string{"a.jpg", "b.jpg"}); r.Code != 200 {
 		t.Fatal(r.Body.String())
 	}
-	if err := c.describe("Album/a-1-1-1.jpg", "Keep this note"); err != nil {
+	price := "25.00 SEK"
+	if err := c.editDetails("Album/a-1-1-1.jpg", "Keep this note", &price); err != nil {
 		t.Fatal(err)
 	}
 	review := ImportReview{Options: ImportOptions{Name: "Album", Mode: "paged", Pages: 2, Rows: 2, Columns: 2}, Files: []string{"a.jpg", "b.jpg"}, Actions: map[int]string{}}
@@ -422,6 +423,12 @@ func TestExistingAlbumReplaceRenameAndNotes(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(c.data.Root, "Album", "a-1-1-1.jpg")); !os.IsNotExist(err) {
 		t.Fatal("old slot image was not replaced")
+	}
+	if c.data.Images["Album/different-1-1-1.png"].Price != price {
+		t.Fatal("replacement lost price")
+	}
+	if c.data.Images["Album/b-1-2-1.jpg"].Price != "" {
+		t.Fatal("renamed copy inherited a price")
 	}
 	if c.data.Images["Album/different-1-1-1.png"].Description != "Keep this note" {
 		t.Fatal("description not transferred to replacement")

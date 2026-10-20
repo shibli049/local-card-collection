@@ -493,7 +493,7 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	installed := []string{}
 	backups := map[string]string{}
-	descriptionTransfers := map[string]string{}
+	detailTransfers := map[string]imageDetails{}
 	rollback := func(cause error) {
 		failures := []string{}
 		for _, path := range installed {
@@ -527,6 +527,7 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, entry := range plan.Entries {
 		descriptions := []string{}
+		price := ""
 		for _, name := range entry.Replaces {
 			original := filepath.Join(destination, name)
 			if _, ok := backups[original]; ok {
@@ -539,6 +540,9 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			backups[original] = backup
 			key := filepath.ToSlash(filepath.Join(o.Name, name))
+			if value := c.data.Images[key].Price; price == "" && value != "" {
+				price = value
+			}
 			if note := c.data.Images[key].Description; note != "" && !slices.Contains(descriptions, note) {
 				descriptions = append(descriptions, note)
 			}
@@ -568,11 +572,11 @@ func (c *Catalog) importHTTP(w http.ResponseWriter, r *http.Request) {
 			rollback(closeErr)
 			return
 		}
-		if len(descriptions) > 0 {
-			descriptionTransfers[filepath.ToSlash(filepath.Join(o.Name, entry.Filename))] = strings.Join(descriptions, "\n\n")
+		if len(descriptions) > 0 || price != "" {
+			detailTransfers[filepath.ToSlash(filepath.Join(o.Name, entry.Filename))] = imageDetails{Description: strings.Join(descriptions, "\n\n"), Price: price}
 		}
 	}
-	if _, err = c.scanLocked(root, map[string]Album{o.Name: o.album()}, descriptionTransfers); err != nil {
+	if _, err = c.scanLocked(root, map[string]Album{o.Name: o.album()}, detailTransfers); err != nil {
 		rollback(err)
 		return
 	}

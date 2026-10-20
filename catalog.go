@@ -22,6 +22,7 @@ type Image struct {
 	Row         *int   `json:"row"`
 	Col         *int   `json:"col"`
 	Description string `json:"description"`
+	Price       string `json:"price"`
 	Present     bool   `json:"present"`
 	Revision    string `json:"revision"`
 }
@@ -150,7 +151,7 @@ func (c *Catalog) scan(directory string) (int, error) {
 	defer c.mu.Unlock()
 	return c.scanLocked(directory, nil, nil)
 }
-func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, descriptions map[string]string) (int, error) {
+func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, details map[string]imageDetails) (int, error) {
 	if directory == "" {
 		directory = c.data.Root
 	}
@@ -221,23 +222,36 @@ func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, des
 		if album, ok := next.Albums[filepath.ToSlash(filepath.Dir(relative))]; ok && album.Mode == "box" {
 			page, row, col = nil, nil, nil
 		}
-		next.Images[key] = Image{Path: key, Folder: filepath.ToSlash(filepath.Dir(relative)), Filename: entry.Name(), Page: page, Row: row, Col: col, Description: next.Images[key].Description, Present: true, Revision: fmt.Sprintf("%x-%x", info.ModTime().UnixNano(), info.Size())}
+		next.Images[key] = Image{Path: key, Folder: filepath.ToSlash(filepath.Dir(relative)), Filename: entry.Name(), Page: page, Row: row, Col: col, Description: next.Images[key].Description, Price: next.Images[key].Price, Present: true, Revision: fmt.Sprintf("%x-%x", info.ModTime().UnixNano(), info.Size())}
 		count++
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("scan stopped; previous catalog kept: %w", err)
 	}
-	for path, note := range descriptions {
+	for path, details := range details {
 		item := next.Images[path]
-		item.Description = note
+		item.Description = details.Description
+		item.Price = details.Price
 		next.Images[path] = item
 	}
 	return count, c.commit(next)
 }
+
+type imageDetails struct {
+	Description string
+	Price       string
+}
+
 func (c *Catalog) describe(path, description string) error {
+	return c.editDetails(path, description, nil)
+}
+func (c *Catalog) editDetails(path, description string, price *string) error {
 	if len([]rune(description)) > 20000 {
 		return errors.New("description must be under 20,000 characters")
+	}
+	if price != nil && len([]rune(*price)) > 80 {
+		return errors.New("price must be under 80 characters")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -247,6 +261,9 @@ func (c *Catalog) describe(path, description string) error {
 	}
 	next := c.snapshot()
 	item.Description = description
+	if price != nil {
+		item.Price = strings.TrimSpace(*price)
+	}
 	next.Images[path] = item
 	return c.commit(next)
 }
@@ -296,7 +313,8 @@ func albumPointer(albums map[string]Album, key string) *Album {
 	}
 	return nil
 }
-func (c *Catalog) list(filters Filters) Listing {
+func (c *Catalog) list(filters Filters) Listing { return c.listImages(filters, true) }
+func (c *Catalog) listImages(filters Filters, paginate bool) Listing {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	result := Listing{Items: []Image{}, Folders: []FolderSummary{}, Pages: []int{}, Root: c.data.Root}
@@ -371,6 +389,10 @@ func (c *Catalog) list(filters Filters) Listing {
 	result.Total = len(matches)
 	result.PageCount = max(1, (result.Total+59)/60)
 	result.Page = max(1, min(filters.Page, result.PageCount))
+	if !paginate {
+		result.Items = matches
+		return result
+	}
 	start := (result.Page - 1) * 60
 	end := min(start+60, result.Total)
 	result.Items = matches[start:end]

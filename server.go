@@ -106,6 +106,7 @@ func (c *Catalog) handler() http.Handler {
 				var input struct {
 					Path        string  `json:"path"`
 					Description *string `json:"description"`
+					Price       *string `json:"price"`
 				}
 				if err := decode(w, r, &input); err != nil {
 					badRequest(w, err)
@@ -115,7 +116,7 @@ func (c *Catalog) handler() http.Handler {
 					badRequest(w, fmt.Errorf("description must be text"))
 					return
 				}
-				if err := c.describe(input.Path, *input.Description); err != nil {
+				if err := c.editDetails(input.Path, *input.Description, input.Price); err != nil {
 					badRequest(w, err)
 					return
 				}
@@ -131,6 +132,12 @@ func (c *Catalog) handler() http.Handler {
 			return
 		}
 		switch r.URL.Path {
+		case "/api/export":
+			if !c.authenticated(r) {
+				writeJSON(w, 401, map[string]string{"error": "Administrator sign-in is required."})
+				return
+			}
+			c.exportCSV(w, r)
 		case "/api/session":
 			authenticated := c.authenticated(r)
 			username := ""
