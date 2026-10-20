@@ -303,7 +303,7 @@ func (c *Catalog) scanLocked(directory string, albumUpdate map[string]Album, det
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != root && (strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" || entry.Name() == ".card-atlas-trash") {
+			if path != root && (strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" || entry.Name() == ".card-atlas-trash" || entry.Name() == ".log") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -564,7 +564,11 @@ func (c *Catalog) listImages(filters Filters, paginate bool) Listing {
 	}
 	slices.Sort(result.Pages)
 	result.Total = len(matches)
-	result.PageCount = max(1, (result.Total+59)/60)
+	pageSize := 60
+	if len(terms) > 0 {
+		pageSize = 240
+	}
+	result.PageCount = max(1, (result.Total+pageSize-1)/pageSize)
 	result.Page = max(1, min(filters.Page, result.PageCount))
 	if !paginate {
 		for _, entry := range matches {
@@ -572,8 +576,8 @@ func (c *Catalog) listImages(filters Filters, paginate bool) Listing {
 		}
 		return result
 	}
-	start := (result.Page - 1) * 60
-	for _, entry := range matches[start:min(start+60, len(matches))] {
+	start := (result.Page - 1) * pageSize
+	for _, entry := range matches[start:min(start+pageSize, len(matches))] {
 		result.Items = append(result.Items, entry.image)
 	}
 	return result

@@ -5,12 +5,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 // Exercise the application's registered event handlers without a browser or
-// third-party DOM library. Only the DOM operations used by the import form
+// third-party DOM library. Only the DOM operations used by the tested handlers
 // are modeled; no catalog or image files are written.
 function app() {
   class Element {
     constructor() {
-      this.dataset = {}; this.value = ''; this.files = []; this.open = false;
+      this.attributes = {}; this.dataset = {}; this.value = ''; this.files = []; this.open = false;
       this.children = []; this.listeners = new Map(); this.classes = new Set();
       this.classList = {add: name => this.classes.add(name), remove: name => this.classes.delete(name), toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name)};
     }
@@ -21,7 +21,10 @@ function app() {
     dispatch(name, event = {}) { for (const handler of this.listeners.get(name) || []) handler(event); }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
-    setAttribute() {}
+    setAttribute(name, value) { this.attributes[name] = value; }
+    getAttribute(name) { return this.attributes[name] ?? null; }
+    removeAttribute(name) { delete this.attributes[name]; }
+    click() { return this.onclick?.(); }
     showModal() { this.open = true; }
     close() { this.open = false; }
     focus() {}
@@ -321,4 +324,155 @@ test('album covers request thumbnails even when card previews are off', () => {
   assert.equal(a.read('cover.children[1].loading'),'lazy');
   assert.match(a.read('cover.children[1].src'),/^\/thumbnail\?/);
   assert.equal(a.read('showPreviews'),false);
+});
+
+test('details show all admin fields with saved values, and viewer mode stays read-only', () => {
+  const a=app();
+  vm.runInContext('var item={path:"Box/card.jpg",folder:"Box",filename:"card.jpg",name:"Saved name",description:"Saved description",price:"15 SEK",tags:["Rare"],page:null,row:null,col:null}; state={items:[item],folders:[{path:"Box",album:{mode:"box"}}]}; applyAccess(); openDetail(item);',a.context);
+  for (const id of ['nameField','tagsField','priceField','pickMove','saveButton']) assert.equal(a.get(id).hidden,false,id);
+  assert.equal(a.get('cardName').value,'Saved name');
+  assert.equal(a.get('tagsInput').value,'Rare');
+  assert.equal(a.get('price').value,'15 SEK');
+  assert.equal(a.get('description').value,'Saved description');
+  assert.equal(a.get('detailTags').hidden,true);
+  assert.equal(a.get('metadata').children.length,14);
+  assert.equal(a.get('detailPrev').disabled,true);
+  assert.equal(a.get('detailNext').disabled,true);
+  vm.runInContext('canEdit=false; applyAccess(); openDetail(item);',a.context);
+  for (const id of ['nameField','tagsField','priceField','pickMove','saveButton']) assert.equal(a.get(id).hidden,true,id);
+  assert.equal(a.get('description').readOnly,true);
+  assert.equal(a.get('detailPrice').hidden,false);
+  assert.equal(a.get('detailTags').hidden,false);
+});
+
+test('details navigation preserves unsaved edits when discard is declined', () => {
+  const a=app();
+  vm.runInContext('var first={path:"Box/a.jpg",folder:"Box",filename:"a.jpg",name:"First",description:"",price:"",tags:[],page:null,row:null,col:null}; var second={...first,path:"Box/b.jpg",filename:"b.jpg",name:"Second"}; state={items:[first,second],folders:[]}; var confirmations=0; confirm=()=>{confirmations++;return false;}; openDetail(first);',a.context);
+  a.get('description').value='Unsaved note';
+  a.get('detailNext').onclick();
+  assert.equal(a.read('selected.path'),'Box/a.jpg');
+  assert.equal(a.get('description').value,'Unsaved note');
+  a.get('closeDetail').onclick();
+  assert.equal(a.get('detailDialog').open,true);
+  assert.equal(a.read('confirmations'),2);
+  vm.runInContext('confirm=()=>true;',a.context);
+  a.get('detailNext').onclick();
+  assert.equal(a.read('selected.path'),'Box/b.jpg');
+  assert.equal(a.get('description').value,'');
+  assert.equal(a.get('detailNext').disabled,true);
+  assert.equal(a.get('detailPrev').disabled,false);
+});
+
+test('failed bulk transfer preserves selection, prevents duplicate requests, and allows retry', async () => {
+  const a=app();
+  vm.runInContext('selectedImages.set("Source/a.jpg",{path:"Source/a.jpg",folder:"Source"}); selectingImages=true; var calls=0, rejectTransfer; api=()=>{calls++;return new Promise((resolve,reject)=>{rejectTransfer=reject;});};',a.context);
+  a.get('transferDestination').value='Destination';
+  a.get('transferDialog').showModal();
+  const pending=a.get('transferForm').onsubmit({preventDefault(){}});
+  await a.get('transferForm').onsubmit({preventDefault(){}});
+  assert.equal(a.read('calls'),1);
+  assert.equal(a.get('transferConfirm').disabled,true);
+  a.get('transferCancel').onclick();
+  assert.equal(a.get('transferDialog').open,true);
+  vm.runInContext('rejectTransfer(Error("Destination is full"));',a.context);
+  await pending;
+  assert.equal(a.get('transferError').textContent,'Destination is full');
+  assert.equal(a.read('selectedImages.size'),1);
+  assert.equal(a.get('transferConfirm').disabled,false);
+  assert.equal(a.get('transferDestination').disabled,false);
+  a.get('transferCancel').onclick();
+  assert.equal(a.get('transferDialog').open,false);
+});
+
+test('failed deletion keeps its confirmation open and blocks duplicate submissions', async () => {
+  const a=app();
+  vm.runInContext('albumToDelete="Box"; var calls=0,rejectDelete; api=()=>{calls++;return new Promise((resolve,reject)=>{rejectDelete=reject;});};',a.context);
+  a.get('deleteAlbumDialog').showModal();
+  const pending=a.get('deleteAlbumForm').onsubmit({preventDefault(){}});
+  await a.get('deleteAlbumForm').onsubmit({preventDefault(){}});
+  a.get('deleteAlbumCancel').onclick();
+  assert.equal(a.read('calls'),1);
+  assert.equal(a.get('deleteAlbumDialog').open,true);
+  assert.equal(a.get('deleteAlbumConfirm').disabled,true);
+  vm.runInContext('rejectDelete(Error("Catalog could not be saved"));',a.context);
+  await pending;
+  assert.equal(a.get('deleteAlbumError').textContent,'Catalog could not be saved');
+  assert.equal(a.get('deleteAlbumDialog').open,true);
+  assert.equal(a.get('deleteAlbumConfirm').disabled,false);
+  assert.equal(a.get('deleteAlbumCancel').disabled,false);
+});
+
+test('import detection rejects invalid position suffixes and updates after renaming destination', () => {
+  for (const filename of ['plain.jpg','image-0-1-1.jpg','image-1001-1-1.jpg','image-1-101-1.jpg','image-1-1-101.jpg','image-1-2.jpg']) {
+    const a=app(); a.drop([photo(filename)]);
+    assert.equal(a.get('albumMode').value,'box',filename);
+  }
+  const a=app();
+  vm.runInContext('state.folders=[{path:"Saved box",album:{mode:"box"}}];',a.context);
+  a.get('albumName').value='Saved box';
+  a.drop([photo('card-1-2-3.PNG')]);
+  assert.equal(a.get('albumMode').value,'box');
+  assert.equal(a.get('albumMode').disabled,true);
+  a.get('albumName').value='New album'; a.get('albumName').dispatch('input');
+  assert.equal(a.get('albumMode').value,'paged');
+  assert.equal(a.get('albumMode').disabled,false);
+});
+
+test('admin detail saves persist all editable fields and normalize tags', async () => {
+  const a=app();
+  vm.runInContext('var item={path:"Box/a.jpg",folder:"Box",filename:"a.jpg",name:"Old name",description:"",price:"",tags:[],page:null,row:null,col:null}; state={items:[item],folders:[]}; var saved; api=async(url,body)=>{saved={url,body};return {};}; load=async()=>{}; openDetail(item);',a.context);
+  a.get('cardName').value='New name';
+  a.get('tagsInput').value=' Rare, rare, Blue ';
+  a.get('price').value=' 25 SEK ';
+  a.get('description').value='New description';
+  await a.get('descriptionForm').onsubmit({preventDefault(){}});
+  assert.deepEqual(a.read('saved'),{url:'/api/description',body:{path:'Box/a.jpg',name:'New name',tags:['Rare','Blue'],price:'25 SEK',description:'New description'}});
+  assert.equal(a.read('dirty()'),false);
+  assert.equal(a.get('saveButton').disabled,false);
+  assert.equal(a.get('saveStatus').textContent,'Saved locally');
+});
+
+test('failed detail saves keep edits and allow another save', async () => {
+  const a=app();
+  vm.runInContext('var item={path:"Box/a.jpg",folder:"Box",filename:"a.jpg",name:"Original",description:"",price:"",tags:[],page:null,row:null,col:null}; state={items:[item],folders:[]}; api=async()=>{throw Error("Disk is full");}; openDetail(item);',a.context);
+  a.get('description').value='Unsaved description';
+  await a.get('descriptionForm').onsubmit({preventDefault(){}});
+  assert.equal(a.get('saveStatus').textContent,'Disk is full');
+  assert.equal(a.get('saveButton').disabled,false);
+  assert.equal(a.get('description').value,'Unsaved description');
+  assert.equal(a.read('selected.description'),'');
+  assert.equal(a.read('dirty()'),true);
+});
+
+test('network failures show a recovery step instead of browser error text', async () => {
+  const a=app();
+  vm.runInContext('fetch=async()=>{throw TypeError("Failed to fetch");};',a.context);
+  await assert.rejects(vm.runInContext('api("/api/description",{})',a.context),/Check that the app is still running/);
+});
+
+test('unreadable responses show a reload message instead of JSON parser details', async () => {
+  const a=app();
+  vm.runInContext('fetch=async()=>({ok:true,status:200,json:async()=>{throw SyntaxError("Unexpected token <");}});',a.context);
+  await assert.rejects(vm.runInContext('api("/api/session")',a.context),/unreadable response.*Reload the page/);
+});
+
+test('expired sessions clear edit access even when the response cannot be read', async () => {
+  const a=app();
+  vm.runInContext('fetch=async()=>({ok:false,status:401,json:async()=>{throw SyntaxError("Unexpected token <");}});',a.context);
+  await assert.rejects(vm.runInContext('api("/api/description",{})',a.context),/Reload the page/);
+  assert.equal(a.read('canEdit'),false);
+  assert.equal(a.get('saveButton').hidden,true);
+});
+
+test('canceling obsolete searches preserves the abort signal', async () => {
+  const a=app();
+  vm.runInContext('fetch=async()=>{var error=Error("cancelled");error.name="AbortError";throw error;};',a.context);
+  await assert.rejects(vm.runInContext('fetchResponse("/api/images")',a.context),error=>error.name==='AbortError');
+});
+
+test('unexpected UI errors do not expose technical property or parser messages', () => {
+  const a=app();
+  assert.match(a.read('userErrorMessage(TypeError("Cannot read properties of undefined"))'),/Reload the page/);
+  assert.match(a.read('userErrorMessage(SyntaxError("Unexpected token"))'),/Reload the page/);
+  assert.equal(a.read('userErrorMessage(Error("Choose another destination."))'),'Choose another destination.');
 });

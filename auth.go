@@ -55,7 +55,8 @@ func (c *Catalog) loginHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "Could not start a session."})
+		recordError(w, err)
+		writeJSON(w, 500, map[string]string{"error": "Could not sign you in. Please try again."})
 		return
 	}
 	value := hex.EncodeToString(token)

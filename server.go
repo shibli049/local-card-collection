@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,13 +19,22 @@ import (
 var assets embed.FS
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	if status >= 400 {
+		if body, ok := value.(map[string]string); ok {
+			if message, ok := body["error"]; ok {
+				recordError(w, errors.New(message))
+				body["error"] = userError(errors.New(message))
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(value)
 }
 func badRequest(w http.ResponseWriter, err error) {
-	writeJSON(w, 400, map[string]string{"error": err.Error()})
+	recordError(w, err)
+	writeJSON(w, 400, map[string]string{"error": userError(err)})
 }
 func decode(w http.ResponseWriter, r *http.Request, value any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1000000)
@@ -40,7 +50,7 @@ func decode(w http.ResponseWriter, r *http.Request, value any) error {
 func (c *Catalog) handler() http.Handler {
 	files, _ := fs.Sub(assets, "static")
 	static := http.FileServer(http.FS(files))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return c.logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		// A local server must reject DNS rebinding as well as cross-site writes.
@@ -258,7 +268,7 @@ func (c *Catalog) handler() http.Handler {
 		default:
 			http.NotFound(w, r)
 		}
-	})
+	}))
 }
 func (c *Catalog) serveImage(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("path")
@@ -267,29 +277,36 @@ func (c *Catalog) serveImage(w http.ResponseWriter, r *http.Request) {
 	item, exists := c.data.Images[key]
 	c.mu.RUnlock()
 	if root == "" || !exists || !item.Present {
-		http.NotFound(w, r)
+		imageUnavailable(w, nil)
 		return
 	}
 	// OpenRoot prevents path traversal and symlink escapes even if a link is
 	// changed between the scan and the request.
 	directory, err := os.OpenRoot(root)
 	if err != nil {
-		http.NotFound(w, r)
+		imageUnavailable(w, err)
 		return
 	}
 	defer directory.Close()
 	file, err := directory.Open(filepath.FromSlash(key))
 	if err != nil {
-		http.NotFound(w, r)
+		imageUnavailable(w, err)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		http.NotFound(w, r)
+		imageUnavailable(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()))
 	http.ServeContent(w, r, item.Filename, info.ModTime(), file)
+}
+
+func imageUnavailable(w http.ResponseWriter, err error) {
+	if err != nil {
+		recordError(w, err)
+	}
+	http.Error(w, "This image is no longer available. Reload the collection and try again.", http.StatusNotFound)
 }

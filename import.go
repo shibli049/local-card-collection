@@ -214,7 +214,7 @@ func (c *Catalog) planImport(review ImportReview) (ImportPlan, error) {
 	slots := map[int][]string{}
 	disk := []diskEntry{}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" {
+		if strings.HasPrefix(entry.Name(), ".soft-inventory-import-") || entry.Name() == ".card-atlas-cache" || entry.Name() == ".card-atlas-trash" || entry.Name() == ".log" {
 			continue
 		}
 		info, err := entry.Info()

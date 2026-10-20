@@ -166,3 +166,11 @@ go test -run '^$' -bench '^BenchmarkLargeCatalog' -benchmem .
 ```
 
 These benchmarks measure a warm in-memory catalog. They exclude startup, image decoding, disk scans, and full catalog saves. JSON metadata still loads into memory at startup and is rewritten on edits; the view optimizations do not change that storage model.
+
+## Errors and local logs
+
+Errors in the app explain what to try next. Technical request and filesystem errors are recorded in `.log` inside the connected collection folder, beside `catalog.json`. Before a collection is connected, logs use `.log` in the settings directory (`~/.soft-inventory` by default, or the directory selected with `--data`).
+
+Daily `debug-YYYY-MM-DD.log` files record request methods, routes, response statuses and durations. Daily `error-YYYY-MM-DD.log` files record failures and technical error details. Logs do not include request bodies, query strings, passwords or session cookies. Error details can include local file paths.
+
+The app removes its own log files whose last modification time is more than five days old. Cleanup runs when logging starts, at most once an hour during requests, and hourly while the app remains open. Other files in `.log` are left alone. Logs are excluded from collection scans and import conflict checks. If the log folder cannot be written, the app reports that in its terminal and continues running.

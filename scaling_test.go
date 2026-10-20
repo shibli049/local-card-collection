@@ -44,7 +44,7 @@ func TestUnitLargeCatalogBrowseIsBounded(t *testing.T) {
 		t.Fatal("unchanged queries rebuilt the catalog index")
 	}
 	result = c.list(Filters{Query: "blue Rare", Page: 2})
-	if result.Total != 50000 || len(result.Items) != 60 {
+	if result.Total != 50000 || len(result.Items) != 240 {
 		t.Fatal("search lost pagination or tag matching")
 	}
 	response = request(c, "GET", "/api/images?summary=0&folder=Album+01999", "", "")
@@ -62,6 +62,33 @@ func TestUnitLargeCatalogBrowseIsBounded(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("selected album metadata was omitted")
+	}
+}
+func TestSearchShowsMoreResultsWithoutSkippingOrRepeatingCards(t *testing.T) {
+	c := scaleCatalog(485, 5)
+	seen := map[string]bool{}
+	for page, want := range []int{240, 240, 5} {
+		result := c.list(Filters{Query: "blue", Page: page + 1})
+		if result.Total != 485 || result.PageCount != 3 || len(result.Items) != want {
+			t.Fatalf("search page %d: total=%d pages=%d items=%d", page+1, result.Total, result.PageCount, len(result.Items))
+		}
+		for _, item := range result.Items {
+			if seen[item.Path] {
+				t.Fatal("search repeated a card", item.Path)
+			}
+			seen[item.Path] = true
+		}
+	}
+	if len(seen) != 485 {
+		t.Fatal("search skipped cards")
+	}
+	for _, query := range []string{"", "   "} {
+		if result := c.list(Filters{Query: query}); len(result.Items) != 60 || result.PageCount != 9 {
+			t.Fatal("ordinary browsing page size changed")
+		}
+	}
+	if result := c.list(Filters{Query: "nonexistent"}); result.Total != 0 || result.PageCount != 1 || len(result.Items) != 0 {
+		t.Fatal("empty search pagination incorrect")
 	}
 }
 func TestUnitIndexInvalidatesAfterEditAndReload(t *testing.T) {
@@ -189,5 +216,43 @@ func TestUnitThumbnailCachePruningPreservesOtherFiles(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(directory, "keep.txt")); err != nil {
 		t.Fatal("pruner deleted a non-cache file")
+	}
+}
+
+func TestSearchHTTPPaginationRespectsFiltersAndClampsPages(t *testing.T) {
+	c := scaleCatalog(650, 5)
+	for _, scenario := range []struct {
+		name, query               string
+		total, count, page, pages int
+	}{
+		{"large search", "q=blue+Rare&sort=name&page=2", 650, 240, 2, 3},
+		{"last page", "q=blue&page=999", 650, 170, 3, 3},
+		{"negative page", "q=blue&page=-1", 650, 240, 1, 3},
+		{"album filter", "q=blue&folder=Album+00001", 130, 130, 1, 1},
+		{"unpositioned filter", "q=blue&sheet=none", 650, 240, 1, 3},
+		{"physical page filter", "q=blue&sheet=1", 0, 0, 1, 1},
+		{"empty search", "q=missing", 0, 0, 1, 1},
+		{"browse", "page=2", 650, 60, 2, 11},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			response := publicCall(c, "GET", "/api/images?summary=0&"+scenario.query, "", nil)
+			if response.Code != 200 {
+				t.Fatal(response.Code, response.Body.String())
+			}
+			var listing Listing
+			if err := json.Unmarshal(response.Body.Bytes(), &listing); err != nil {
+				t.Fatal(err)
+			}
+			if listing.Total != scenario.total || len(listing.Items) != scenario.count || listing.Page != scenario.page || listing.PageCount != scenario.pages {
+				t.Fatalf("total=%d items=%d page=%d pages=%d", listing.Total, len(listing.Items), listing.Page, listing.PageCount)
+			}
+			if scenario.name == "album filter" {
+				for _, item := range listing.Items {
+					if item.Folder != "Album 00001" {
+						t.Fatal("search escaped folder filter")
+					}
+				}
+			}
+		})
 	}
 }

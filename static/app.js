@@ -18,7 +18,7 @@ async function openDeleteAlbum(path) {
     const count = affected.reduce((sum,album) => sum + album.count, 0);
     $('deleteAlbumSummary').textContent = `Delete “${folderName(path)}” with ${count} photo${count === 1 ? '' : 's'}${affected.length > 1 ? ` across ${affected.length} albums / boxes, including nested folders` : ''}?`;
     $('deleteAlbumError').textContent = ''; $('deleteAlbumDialog').showModal();
-  } catch (error) { notify(error.message,true); }
+  } catch (error) { notify(userErrorMessage(error),true); }
 }
 $('deleteAlbumOpen').onclick = () => openDeleteAlbum(folder);
 $('deleteAlbumCancel').onclick = () => { if (!deletingAlbum) $('deleteAlbumDialog').close(); };
@@ -31,7 +31,7 @@ $('deleteAlbumForm').onsubmit = async event => {
     $('deleteAlbumDialog').close(); selectedImages.clear(); selectingImages=false; cancelMove();
     folder=''; sheet=''; page=1; browsingAlbums=true; $('albumSearch').value=''; $('search').value='';
     await load(); notify('Album deleted. Files are kept in the local recovery folder.');
-  } catch (error) { $('deleteAlbumError').textContent=error.message; }
+  } catch (error) { $('deleteAlbumError').textContent=userErrorMessage(error); }
   finally { deletingAlbum=false; $('deleteAlbumConfirm').disabled=false; $('deleteAlbumCancel').disabled=false; }
 };
 let selectingImages = false, transferring = false;
@@ -76,7 +76,7 @@ $('transferOpen').onclick = async () => {
     $('transferImages').replaceChildren(...[...selectedImages.values()].map(item => el('li', `${item.name || item.filename} · ${folderName(item.folder)}`)));
     $('transferError').textContent = destinations.length ? '' : 'No other albums or boxes are available. Create a destination first.';
     updateTransferSummary(); $('transferDialog').showModal();
-  } catch (error) { notify(error.message, true); }
+  } catch (error) { notify(userErrorMessage(error), true); }
 };
 $('transferCancel').onclick = () => { if (!transferring) $('transferDialog').close(); };
 $('transferDialog').addEventListener('cancel', event => { if (transferring) event.preventDefault(); });
@@ -90,7 +90,7 @@ $('transferForm').onsubmit = async event => {
     selectedImages.clear(); selectingImages = false; $('transferDialog').close();
     folder = destination; sheet = ''; page = 1; browsingAlbums = false; $('search').value = '';
     await load(); notify(`Moved ${paths.length} images to ${folderName(destination)}.`);
-  } catch (error) { $('transferError').textContent = error.message; }
+  } catch (error) { $('transferError').textContent = userErrorMessage(error); }
   finally { transferring = false; $('transferCancel').disabled = false; $('transferDestination').disabled = false; updateTransferSummary(); updateSelectionTools(); }
 };
 let movingCard = null, arranging = false, previewPreference = null;
@@ -102,12 +102,31 @@ let browsingAlbums = true, showPreviews = false, listController;
 let page = 1, state, selected, request = 0, folder = '', sheet = '', view = 'grid', importing = false;
 try { view = localStorage.getItem('libraryView') || view; } catch {}
 if (!['grid', 'table', 'organized'].includes(view)) view = 'grid';
+function userErrorMessage(error) {
+  if (error?.name === 'TypeError' || error?.name === 'SyntaxError') return 'Card Atlas could not display this information. Reload the page and try again.';
+  return typeof error?.message === 'string' ? error.message : 'Something went wrong. Please try again.';
+}
+async function fetchResponse(url, options) {
+  try { return await fetch(url, options); }
+  catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw Error('Could not reach Card Atlas. Check that the app is still running, then try again.');
+  }
+}
+async function responseJSON(response) {
+  try {
+    const body = await response.json();
+    if (!body || typeof body !== 'object') throw Error();
+    return body;
+  } catch { throw Error('Card Atlas returned an unreadable response. Reload the page and try again.'); }
+}
 async function api(url, data) {
-  const response = await fetch(url, data === undefined ? {} : {
+  const response = await fetchResponse(url, data === undefined ? {} : {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
   });
-  const body = await response.json();
-  if (!response.ok) { if (response.status === 401 && !['/api/login', '/api/session'].includes(url)) { canEdit = false; applyAccess(); } throw Error(body.error || 'Request failed'); }
+  if (response.status === 401 && !['/api/login', '/api/session'].includes(url)) { canEdit = false; applyAccess(); }
+  const body = await responseJSON(response);
+  if (!response.ok) throw Error(typeof body.error === 'string' ? body.error : 'The request could not be completed. Please try again.');
   return body;
 }
 const imageUrl = (path, revision = '') => '/image?path=' + encodeURIComponent(path) + '&v=' + encodeURIComponent(revision);
@@ -121,7 +140,7 @@ function applyAccess() {
   $('emptyImport').hidden = !canEdit || !!state?.count;
   $('emptySignIn').hidden = canEdit || !!state?.count;
   $('nameField').hidden = !canEdit; $('cardName').disabled = !canEdit; $('tagsField').hidden = !canEdit; $('priceField').hidden = !canEdit; $('price').readOnly = !canEdit; $('detailPrice').hidden = canEdit || !selected?.price; $('description').readOnly = !canEdit; $('description').placeholder = canEdit ? 'What should you remember about this image?' : 'No description'; $('saveButton').hidden = !canEdit;
-  $('pickMove').hidden = !canEdit;
+  $('pickMove').hidden = !canEdit; $('detailTags').hidden = canEdit;
   $('layoutOpen').hidden = !canEdit || !folder || browsingAlbums || currentAlbum()?.mode !== 'paged';
   $('deleteAlbumOpen').hidden = !canEdit || !folder || folder === '.' || browsingAlbums;
   $('moveTools').hidden = !canEdit || !movingCard;
@@ -135,13 +154,13 @@ $('cancelLogin').onclick = () => $('loginDialog').close();
 $('loginForm').onsubmit = async event => {
   event.preventDefault(); $('loginButton').disabled = true; $('loginError').textContent = '';
   try { await api('/api/login', {username: $('username').value, password: $('password').value}); $('password').value = ''; canEdit = true; applyAccess(); $('loginDialog').close(); await load(); notify('Signed in. You can manage this collection.'); }
-  catch (e) { $('loginError').textContent = e.message; }
+  catch (e) { $('loginError').textContent = userErrorMessage(e); }
   finally { $('loginButton').disabled = false; }
 };
 $('signOut').onclick = async () => {
   if ($('detailDialog').open && dirty() && !confirm('Discard your unsaved changes and sign out?')) return;
   try { await api('/api/logout', {}); canEdit = false; $('detailDialog').close(); applyAccess(); await load(); notify('Signed out. Search-only access is active.'); }
-  catch (e) { notify(e.message, true); }
+  catch (e) { notify(userErrorMessage(e), true); }
 };
 
 function notify(message, isError = false) {
@@ -250,7 +269,7 @@ async function moveTo(path,destination,target='') {
   try {
     await api('/api/arrange',{path:movingCard.path,target,destination,expected:slotOf(movingCard)});
     cancelMove(); await load(); notify(target ? 'Photos swapped. Saved locally.' : 'Photo moved. Saved locally.');
-  } catch(e) { cancelMove(); notify(e.message,true); await load(); }
+  } catch(e) { cancelMove(); notify(userErrorMessage(e),true); await load(); }
   finally { arranging=false; }
 }
 function cancelMove() { movingCard=null; $('moveTools').hidden=true; }
@@ -269,7 +288,7 @@ $('cancelLayout').onclick=()=>$('layoutDialog').close();
 $('layoutForm').onsubmit=async event=> {
   event.preventDefault(); if (!canEdit) return; $('saveLayout').disabled=true;
   try { await api('/api/layout',{folder,album:{mode:'paged',pages:Number($('layoutPages').value),rows:Number($('layoutRows').value),columns:Number($('layoutColumns').value)}}); $('layoutDialog').close(); sheet=''; page=1; await load(); notify('Album layout saved. Empty positions are ready to use.'); }
-  catch(e) { $('layoutError').textContent=e.message; }
+  catch(e) { $('layoutError').textContent=userErrorMessage(e); }
   finally { $('saveLayout').disabled=false; }
 };
 function renderSlots(library) {
@@ -382,9 +401,9 @@ async function load() {
     const params = new URLSearchParams({q:browsingAlbums ? $('albumSearch').value : $('search').value, folder, sheet, sort:view === 'organized' ? 'position' : $('sort').value, page, summary:'0'});
     if (browsingAlbums) params.set('browse','albums');
     else if (slotView()) params.set('layout','auto');
-    const response = await fetch('/api/images?' + params, listController ? {signal:listController.signal} : {});
-    if (!response.ok) throw Error('Could not load the collection.');
-    const data = await response.json();
+    const response = await fetchResponse('/api/images?' + params, listController ? {signal:listController.signal} : {});
+    if (!response.ok) throw Error('Could not load the collection. Try again or check the .log folder for details.');
+    const data = await responseJSON(response);
     if (id !== request) return;
     state = data; page = data.page;
     showPreviews = previewPreference ?? automaticPreviews(data);
@@ -414,24 +433,24 @@ async function load() {
     $('empty').querySelector('h2').textContent = data.count ? 'No matching images' : 'Your collection starts here';
     $('empty').querySelector('p').textContent = data.count ? 'Try another search or clear your filters.' : canEdit ? 'Import photos into an album or connect an existing image folder.' : 'There are no photos yet. An administrator can import photos or connect a folder.';
     $('clearFilters').hidden = !data.count; $('emptyImport').hidden = !!data.count;
-    $('pageLabel').textContent = data.mode === 'slots' ? `Positions ${data.page} of ${data.pageCount} · up to 60 cells per view` : albumMode ? `Albums ${data.page} of ${data.pageCount} · up to 50 albums per view` : `Cards ${data.page} of ${data.pageCount} · up to 60 cards per view`;
+    $('pageLabel').textContent = data.mode === 'slots' ? `Positions ${data.page} of ${data.pageCount} · up to 60 cells per view` : albumMode ? `Albums ${data.page} of ${data.pageCount} · up to 50 albums per view` : `Cards ${data.page} of ${data.pageCount} · up to ${$('search').value.trim() ? 240 : 60} cards per view`;
     $('prev').disabled = data.page === 1; $('next').disabled = data.page >= data.pageCount;
     $('pagination').hidden = data.mode !== 'slots' && !data.total;
     applyAccess(); renderNavigation(); renderLibrary();
-  } catch (e) { if (e.name !== 'AbortError' && id === request) notify(e.message, true); }
+  } catch (e) { if (e.name !== 'AbortError' && id === request) notify(userErrorMessage(e), true); }
 }
 $('connect').onclick = () => { $('folderDialog').showModal(); $('rootInput').focus(); };
 $('cancelFolder').onclick = () => $('folderDialog').close();
 $('folderForm').onsubmit = async event => {
   event.preventDefault(); $('scanButton').disabled = true; $('folderError').textContent = '';
   try { await api('/api/scan', {root: $('rootInput').value.trim()}); $('folderDialog').close(); clearFilters(); notify('Folder connected.'); }
-  catch (e) { $('folderError').textContent = e.message; }
+  catch (e) { $('folderError').textContent = userErrorMessage(e); }
   finally { $('scanButton').disabled = false; }
 };
 $('rescan').onclick = async () => {
   $('rescan').disabled = true; notify('Reloading files from folder…');
   try { const result = await api('/api/scan', {}); await load(); notify(`Folder reloaded. ${result.count} images in your collection.`); }
-  catch (e) { notify(e.message, true); }
+  catch (e) { notify(userErrorMessage(e), true); }
   finally { $('rescan').disabled = false; }
 };
 let timer;
@@ -453,7 +472,7 @@ function openDetail(item) {
   selected = item; $('detailName').textContent = item.name || item.filename; $('cardName').value = item.name || ''; $('tagsInput').value = (item.tags || []).join(', '); $('detailTags').replaceChildren(...(item.tags || []).map(tag => el('span',tag,'tag')));
   $('preview').src = imageUrl(item.path,item.revision); $('preview').alt = item.filename; $('original').href = imageUrl(item.path,item.revision);
   $('price').value = item.price || ''; $('nameField').hidden = !canEdit; $('cardName').disabled = !canEdit; $('tagsField').hidden = !canEdit; $('priceField').hidden = !canEdit; $('detailPrice').textContent = item.price || ''; $('detailPrice').hidden = canEdit || !item.price; $('description').value = item.description; $('saveStatus').textContent = ''; $('metadata').replaceChildren();
-  $('pickMove').hidden = !canEdit;
+  $('pickMove').hidden = !canEdit; $('detailTags').hidden = canEdit;
   const album = state.folders.find(f => f.path === item.folder)?.album;
   for (const [label, value] of [['Filename', item.filename], ['Folder', folderName(item.folder)], ['Type', album?.mode === 'box' ? 'Box' : item.page !== null ? 'Paged image' : 'Unpositioned image'], ['Page', item.page ?? '—'], ['Row', item.row ?? '—'], ['Column', item.col ?? '—'], ['Path', item.path]]) $('metadata').append(el('dt', label), el('dd', String(value)));
   const index = state.items.findIndex(i => i.path === item.path);
@@ -470,7 +489,7 @@ for (const [id, delta] of [['detailPrev', -1], ['detailNext', 1]]) $(id).onclick
 $('descriptionForm').onsubmit = async event => {
   event.preventDefault(); if (!canEdit) return; $('saveButton').disabled = true; $('saveStatus').textContent = 'Saving…';
   try { const description = $('description').value, price = $('price').value.trim(), name = $('cardName').value.trim(), tags = selectedTags(); await api('/api/description', {path: selected.path, description, price, name, tags}); selected.name = name; selected.tags = tags; $('cardName').value = name; $('detailName').textContent = name; $('detailTags').replaceChildren(...tags.map(tag => el('span', tag, 'tag'))); selected.description = description; selected.price = price; $('price').value = price; $('saveStatus').textContent = 'Saved locally'; await load(); }
-  catch (e) { $('saveStatus').textContent = e.message; }
+  catch (e) { $('saveStatus').textContent = userErrorMessage(e); }
   finally { $('saveButton').disabled = false; }
 };
 
@@ -595,7 +614,7 @@ async function reviewImport(keepActions = false) {
   try {
     const plan = await api('/api/import-plan', {options, files: files.map(f => f.name), actions: importActions});
     if (id !== reviewRequest) return; importPlan = plan;
-  } catch (e) { if (id === reviewRequest) { $('importError').textContent = e.message; importPlan = importPlan ? {...importPlan, unresolved: Math.max(1, importPlan.unresolved)} : null; } }
+  } catch (e) { if (id === reviewRequest) { $('importError').textContent = userErrorMessage(e); importPlan = importPlan ? {...importPlan, unresolved: Math.max(1, importPlan.unresolved)} : null; } }
   finally { if (id === reviewRequest) { reviewing = false; $('importStatus').textContent = ''; renderImportPreview(); renderConflicts(); } }
 }
 function openImport() {
@@ -656,7 +675,7 @@ function upload(form, settings) {
     const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/import?' + new URLSearchParams(settings));
     xhr.upload.onprogress = event => { if (event.lengthComputable) { const percent = Math.round(event.loaded / event.total * 100); $('importProgress').value = percent; $('importStatus').textContent = percent === 100 ? 'Organizing and saving photos…' : `Uploading ${percent}%…`; } };
     xhr.onerror = () => reject(Error('Connection interrupted. Reload the folder before retrying.'));
-    xhr.onload = () => { try { const data = JSON.parse(xhr.responseText); if (xhr.status < 200 || xhr.status >= 300) { if (xhr.status === 401) { canEdit = false; applyAccess(); } reject(Error(data.error || 'Import failed')); } else resolve(data); } catch { reject(Error('Import failed. Check that the app is still running.')); } };
+    xhr.onload = () => { try { const data = JSON.parse(xhr.responseText); if (xhr.status < 200 || xhr.status >= 300) { if (xhr.status === 401) { canEdit = false; applyAccess(); } reject(Error(typeof data?.error === 'string' ? data.error : 'Could not import the photos. Review the selection and try again.')); } else resolve(data); } catch { reject(Error('Import failed. Check that the app is still running.')); } };
     xhr.send(form);
   });
 }
@@ -668,11 +687,11 @@ $('importForm').onsubmit = async event => {
   const controls = [...$('importForm').querySelectorAll('input, select, button')]; controls.forEach(control => control.disabled = true);
   try {
     const result = await upload(form, settings); $('importDialog').close(); $('importForm').reset(); importPhotos = []; automaticImportType = true; lastAlbumName = null; browsingAlbums = false; folder = result.album; sheet = ''; page = 1; $('search').value = ''; await load(); notify(`Imported ${result.count} photo${result.count === 1 ? '' : 's'} into ${result.album}.`);
-  } catch (e) { failure = e.message; }
+  } catch (e) { failure = userErrorMessage(e); }
   finally { importing = false; controls.forEach(control => control.disabled = false); $('importProgress').hidden = true; $('importStatus').textContent = ''; updateImportPreview(); if (failure) $('importError').textContent = failure; }
 };
 window.addEventListener('beforeunload', event => { if (importing || ($('detailDialog').open && dirty())) { event.preventDefault(); event.returnValue = ''; } });
-refreshAccess().then(load).catch(error => notify(error.message, true));
+refreshAccess().then(load).catch(error => notify(userErrorMessage(error), true));
 
 // CSV exports always include whole selected albums, not just visible results.
 let exportSelection = new Set(), exportDirectory = null, exportPage = 1;
@@ -702,7 +721,7 @@ $('exportOpen').onclick = async () => {
     exportDirectory = null;
     if ((state?.albumCount || 0) > (state?.folders.length || 0)) { const directory = await api('/api/images?browse=albums&all=1'); exportDirectory = directory.folders; }
     exportPage = 1; $('exportAlbumSearch').value = ''; exportSelection = new Set(exportAlbumsAvailable().map(a => a.path)); renderExportSelection(); $('exportDialog').showModal();
-  } catch (error) { notify(error.message,true); }
+  } catch (error) { notify(userErrorMessage(error),true); }
 };
 $('exportAll').onchange = () => { exportSelection = $('exportAll').checked ? new Set(exportAlbumsAvailable().map(a => a.path)) : new Set(); renderExportSelection(); };
 $('exportAlbumSearch').oninput = () => { exportPage = 1; renderExportSelection(); };
@@ -712,10 +731,10 @@ $('exportForm').onsubmit = async event => {
   event.preventDefault(); if (!canEdit || !exportSelection.size) return;
   try {
     await refreshAccess(); if (!canEdit) { openLogin(); return; }
-    const response = await fetch('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({albums:[...exportSelection]})});
-    if (!response.ok) { if (response.status === 401) await refreshAccess(); const body = await response.json(); throw Error(body.error || 'Export failed'); }
+    const response = await fetchResponse('/api/export', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({albums:[...exportSelection]})});
+    if (!response.ok) { if (response.status === 401) await refreshAccess(); const body = await responseJSON(response); throw Error(typeof body.error === 'string' ? body.error : 'Could not export the albums. Please try again.'); }
     const downloadUrl = URL.createObjectURL(await response.blob());
     const link = el('a'); link.href = downloadUrl; link.download = 'CardAtlas-export.csv';
     document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000); $('exportDialog').close();
-  } catch (error) { notify(error.message, true); }
+  } catch (error) { notify(userErrorMessage(error), true); }
 };

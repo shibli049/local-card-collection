@@ -108,3 +108,97 @@ func TestTransferRequiresAdministrator(t *testing.T) {
 		t.Fatal("public transfer allowed", response.Code)
 	}
 }
+
+func TestTransferMultipleSourcesPersistsThroughRestart(t *testing.T) {
+	c := newTestCatalog(t)
+	root := t.TempDir()
+	for _, key := range []string{"First/a.jpg", "Second/b-1-1-1.jpg", "Destination/existing-1-1-2.jpg"} {
+		writeImage(t, root, key)
+	}
+	if _, err := c.scan(root); err != nil {
+		t.Fatal(err)
+	}
+	c.data.Albums["Destination"] = Album{"paged", 2, 1, 2}
+	login := publicCall(c, "POST", "/api/login", `{"username":"admin","password":"Inventory@2026"}`, nil)
+	response := publicCall(c, "POST", "/api/transfer", `{"paths":["First/a.jpg","Second/b-1-1-1.jpg"],"destination":"Destination"}`, login.Result().Cookies()[0])
+	if response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	reopened, err := openCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]Slot{"Destination/a.jpg": {1, 1, 1}, "Destination/b-1-1-1.jpg": {2, 1, 1}} {
+		item := reopened.data.Images[key]
+		if !item.Present || imageSlot(item) != want {
+			t.Fatalf("%s: got %+v", key, item)
+		}
+		contents, err := os.ReadFile(filepath.Join(root, key))
+		if err != nil || string(contents) != "image bytes" {
+			t.Fatal("file contents changed", err)
+		}
+	}
+	if reopened.data.Albums["First"].Mode != "box" || reopened.data.Albums["Second"].Mode != "paged" {
+		t.Fatal("source types were lost")
+	}
+}
+
+func TestTransferRejectsCollidingNamesAcrossSources(t *testing.T) {
+	c := newTestCatalog(t)
+	root := t.TempDir()
+	for _, key := range []string{"First/a.jpg", "Second/a.jpg", "Destination/keep.jpg"} {
+		writeImage(t, root, key)
+	}
+	if _, err := c.scan(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.transfer([]string{"First/a.jpg", "Second/a.jpg"}, "Destination"); err == nil {
+		t.Fatal("duplicate destination filenames accepted")
+	}
+	for _, key := range []string{"First/a.jpg", "Second/a.jpg", "Destination/keep.jpg"} {
+		if _, err := os.Stat(filepath.Join(root, key)); err != nil {
+			t.Fatal("original lost", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "Destination/a.jpg")); !os.IsNotExist(err) {
+		t.Fatal("partial transfer created a file")
+	}
+}
+
+func TestTransferRejectsInvalidSelectionsAndDestinations(t *testing.T) {
+	for _, scenario := range []string{"empty", "too many", "unknown destination", "traversal", "missing file"} {
+		t.Run(scenario, func(t *testing.T) {
+			c := newTestCatalog(t)
+			root := t.TempDir()
+			writeImage(t, root, "Source/a.jpg")
+			writeImage(t, root, "Destination/b.jpg")
+			if _, err := c.scan(root); err != nil {
+				t.Fatal(err)
+			}
+			paths, destination := []string{"Source/a.jpg"}, "Destination"
+			switch scenario {
+			case "empty":
+				paths = nil
+			case "too many":
+				paths = make([]string, 1001)
+			case "unknown destination":
+				destination = "Missing"
+			case "traversal":
+				destination = "../Destination"
+			case "missing file":
+				if err := os.Remove(filepath.Join(root, "Source/a.jpg")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.transfer(paths, destination); err == nil {
+				t.Fatal("invalid transfer accepted")
+			}
+			if c.list(Filters{}).Total != 2 {
+				t.Fatal("failed transfer changed the catalog")
+			}
+			if _, err := os.Stat(filepath.Join(root, "Destination/a.jpg")); !os.IsNotExist(err) {
+				t.Fatal("partial destination file remains")
+			}
+		})
+	}
+}

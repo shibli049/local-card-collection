@@ -25,7 +25,7 @@ func openBrowser(address string) error {
 	// Wait reaps the short-lived launcher; browser lifetime is independent.
 	return command.Run()
 }
-func run() error {
+func run() (runErr error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -39,7 +39,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	catalog, err := openCatalog(directory)
+	var catalog *Catalog
+	defer func() {
+		if runErr != nil {
+			base := directory
+			if catalog != nil {
+				base = catalog.logBase()
+			}
+			logEvent(base, "ERROR", "startup_failed", map[string]any{"error": runErr.Error()})
+		}
+	}()
+	catalog, err = openCatalog(directory)
 	if err != nil {
 		return err
 	}
@@ -61,6 +71,10 @@ func run() error {
 		return err
 	}
 	address := fmt.Sprintf("http://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+	logEvent(catalog.logBase(), "DEBUG", "server_started", map[string]any{"address": address})
+	stopLogs := make(chan struct{})
+	defer close(stopLogs)
+	go catalog.maintainLogs(stopLogs)
 	fmt.Printf("Card Atlas: %s\nKeep this window open. Press Ctrl+C to stop.\n", address)
 	if catalog.data.Root != "" {
 		fmt.Printf("Catalog: %s\n", catalog.file)
@@ -70,6 +84,7 @@ func run() error {
 	if !*noBrowser {
 		go func() {
 			if err := openBrowser(address); err != nil {
+				logEvent(catalog.logBase(), "ERROR", "browser_open_failed", map[string]any{"error": err.Error()})
 				fmt.Printf("Open %s in your browser.\n", address)
 			}
 		}()
@@ -79,7 +94,7 @@ func run() error {
 }
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Could not start Card Atlas:", err)
+		fmt.Fprintln(os.Stderr, "Could not start Card Atlas:", userError(err))
 		if runtime.GOOS == "windows" {
 			fmt.Println("Press Enter to close.")
 			fmt.Scanln()
