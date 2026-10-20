@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.soft-inventory/
+*.sqlite3
+*.sqlite3-*
+/build/
+/dist/
+*.spec
+
+.DS_Store

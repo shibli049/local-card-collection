@@ -1,0 +1,190 @@
+package main
+
+import (
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+//go:embed static/*
+var assets embed.FS
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(value)
+}
+func badRequest(w http.ResponseWriter, err error) {
+	writeJSON(w, 400, map[string]string{"error": err.Error()})
+}
+func decode(w http.ResponseWriter, r *http.Request, value any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1000000)
+	d := json.NewDecoder(r.Body)
+	if err := d.Decode(value); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("request must contain one JSON object")
+	}
+	return nil
+}
+func (c *Catalog) handler() http.Handler {
+	files, _ := fs.Sub(assets, "static")
+	static := http.FileServer(http.FS(files))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		// A local server must reject DNS rebinding as well as cross-site writes.
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			http.Error(w, "Local requests only", 403)
+			return
+		}
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			http.Error(w, "Cross-site request rejected", 403)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+			http.Error(w, "Cross-origin request rejected", 403)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" {
+				if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+					badRequest(w, fmt.Errorf("expected application/json"))
+					return
+				}
+				if r.URL.Path == "/api/login" {
+					c.loginHTTP(w, r)
+				} else {
+					c.logoutHTTP(w, r)
+				}
+				return
+			}
+			if !c.authenticated(r) {
+				writeJSON(w, 401, map[string]string{"error": "Administrator sign-in is required."})
+				return
+			}
+			if r.URL.Path == "/api/import" {
+				c.importHTTP(w, r)
+				return
+			}
+			if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+				badRequest(w, fmt.Errorf("expected application/json"))
+				return
+			}
+			switch r.URL.Path {
+			case "/api/import-plan":
+				c.importPlanHTTP(w, r)
+			case "/api/scan":
+				var input struct {
+					Root string `json:"root"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				count, err := c.scan(strings.TrimSpace(input.Root))
+				if err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]int{"count": count})
+			case "/api/description":
+				var input struct {
+					Path        string  `json:"path"`
+					Description *string `json:"description"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if input.Description == nil {
+					badRequest(w, fmt.Errorf("description must be text"))
+					return
+				}
+				if err := c.describe(input.Path, *input.Description); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]bool{"saved": true})
+			default:
+				http.NotFound(w, r)
+			}
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD, POST")
+			http.Error(w, "Method not allowed", 405)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/session":
+			authenticated := c.authenticated(r)
+			username := ""
+			if authenticated {
+				username = adminUsername
+			}
+			writeJSON(w, 200, map[string]any{"authenticated": authenticated, "username": username})
+		case "/api/images":
+			q := r.URL.Query()
+			page, _ := strconv.Atoi(q.Get("page"))
+			result := c.list(Filters{Query: q.Get("q"), Folder: q.Get("folder"), Sheet: q.Get("sheet"), Sort: q.Get("sort"), Page: page})
+			if !c.authenticated(r) {
+				result.Root = ""
+			}
+			writeJSON(w, 200, result)
+		case "/image":
+			c.serveImage(w, r)
+		case "/", "/app.js", "/style.css":
+			static.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+func (c *Catalog) serveImage(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("path")
+	c.mu.RLock()
+	root := c.data.Root
+	item, exists := c.data.Images[key]
+	c.mu.RUnlock()
+	if root == "" || !exists || !item.Present {
+		http.NotFound(w, r)
+		return
+	}
+	// OpenRoot prevents path traversal and symlink escapes even if a link is
+	// changed between the scan and the request.
+	directory, err := os.OpenRoot(root)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer directory.Close()
+	file, err := directory.Open(filepath.FromSlash(key))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, info.ModTime().UnixNano(), info.Size()))
+	http.ServeContent(w, r, item.Filename, info.ModTime(), file)
+}
