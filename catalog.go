@@ -98,7 +98,7 @@ func openCatalog(directory string) (*Catalog, error) {
 			return c, nil
 		}
 		if _, oldErr := os.Stat(filepath.Join(directory, "catalog.sqlite3")); oldErr == nil {
-			return nil, errors.New("an older SQLite catalog exists: run python3 migrate_catalog.py first, or choose another --data directory")
+			return nil, errors.New("this folder contains an older catalog format that is no longer supported; keep the original files and choose a different settings folder with --data")
 		}
 		return c, nil
 	}

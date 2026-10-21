@@ -1,6 +1,6 @@
 # Import an existing folder
 
-Use this guide when your photos are already in folders on your computer. Card Atlas calls this Connect folder. It reads the photos where they are and adds them to your collection.
+Use this guide when your photos are already in folders on the computer running Card Atlas. Card Atlas calls this Connect folder. It reads the photos where they are and adds them to your collection.
 
 For help with editing, moving photos or other tasks, go back to the collection and choose Getting started tour.
 
@@ -24,10 +24,10 @@ Check this before connecting the folder. Saved album and box types stay fixed. Y
 
 1. Sign in as an administrator.
 2. Choose Connect folder beside Image folder.
-3. Enter the full folder location. On a Mac it might look like `/Users/you/Pictures/My collection`. On Windows it might look like `C:\Users\you\Pictures\My collection`.
+3. Enter the full folder location on the computer running Card Atlas. On a Mac it might look like `/Users/you/Pictures/My collection`. On Windows it might look like `C:\Users\you\Pictures\My collection`.
 4. Choose Connect & scan and wait for the completion message.
 
-If you are unsure how to find the full location, ask someone to help you copy it from your computer’s folder window.
+If you are unsure how to find the full location, ask someone to help you copy it from the folder window on the computer running Card Atlas.
 
 Card Atlas connects one main folder per collection. If a folder is already connected, Connect folder is hidden. Use the existing collection or ask for help setting up a separate one.
 

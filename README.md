@@ -6,7 +6,7 @@ Browse image collections by album, page, row and column. Import photos in bulk, 
 
 Unzip the download for your computer, then open `CardAtlas` on macOS or `CardAtlas.exe` on Windows. Your browser opens automatically. Keep the terminal window open while using the app; closing it stops the server.
 
-The executable includes the server and browser interface. No Python, Go, database installation, or internet connection is needed to use it. It listens on `127.0.0.1`, so only the same computer can connect. The browser opens at `http://localhost:8765` by default. Port 8765 is used when available; otherwise the app selects another port and prints the address.
+The executable includes the server and browser interface. No Python, Go, database installation, or internet connection is needed to use it. By default it listens on `127.0.0.1`, so only the same computer can connect. Start it with `--host 0.0.0.0` to allow connections through its other IPv4 addresses. The browser opens at `http://localhost:8765` by default. Port 8765 is used when available; otherwise the app selects another port and prints the address.
 
 Builds are unsigned. macOS or Windows may display a security prompt. The macOS downloads are standalone console executables, not `.app` bundles. ZIP files preserve the executable permission on macOS.
 
@@ -79,17 +79,18 @@ Advanced launch options:
 ```sh
 ./CardAtlas --data ./another-catalog --folder "/path/to/images"
 ./CardAtlas --no-browser --port 9000
+./CardAtlas --host 0.0.0.0 --port 8765
 ```
 
-On Windows, run `CardAtlas.exe` with the same flags. `--data` chooses a separate settings directory (or an image root already containing a catalog), `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
+On Windows, run `CardAtlas.exe` with the same flags. For example, from PowerShell:
 
-If you used the earlier Python version, stop it and run the one-time migration before starting this version:
-
-```sh
-python3 migrate_catalog.py
+```powershell
+.\CardAtlas.exe --host 0.0.0.0 --port 8765
 ```
 
-The migration reads the old SQLite file without modifying it, imports descriptions and paths into `catalog.json`, and refuses to overwrite an existing JSON catalog. Use `--data /path/to/catalog-directory` for a nondefault location. Python is needed only for this migration.
+Omit `--host`, or use `--host localhost` or `--host 127.0.0.1`, for access from this computer only. The flag applies to that run; it does not change the default for the next launch. With `--host 0.0.0.0`, other devices use the computer’s network IP, for example `http://192.168.1.50:8765`. Use the port printed by the app if it chooses another one. Network connections must be allowed through the computer’s firewall. IP-address URLs are supported; custom domain names are not. Browsing stays read-only until an administrator signs in. Folder locations always refer to the computer running Card Atlas.
+
+`--data` chooses a separate settings directory (or an image root already containing a catalog), `--folder` scans a folder at startup, `--no-browser` leaves browser opening to you, and `--port 0` chooses an available port.
 
 ## Build macOS and Windows downloads from a Mac
 

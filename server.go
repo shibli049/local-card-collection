@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,17 +47,15 @@ func decode(w http.ResponseWriter, r *http.Request, value any) error {
 	return nil
 }
 func (c *Catalog) handler() http.Handler {
+	return c.handlerForHost("127.0.0.1")
+}
+func (c *Catalog) handlerForHost(listenHost string) http.Handler {
 	files, _ := fs.Sub(assets, "static")
 	static := http.FileServer(http.FS(files))
 	return c.logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
-		// A local server must reject DNS rebinding as well as cross-site writes.
-		host, _, err := net.SplitHostPort(r.Host)
-		if err != nil {
-			host = r.Host
-		}
-		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		if !allowedRequestHost(r.Host, listenHost == "0.0.0.0") {
 			http.Error(w, "Local requests only", 403)
 			return
 		}

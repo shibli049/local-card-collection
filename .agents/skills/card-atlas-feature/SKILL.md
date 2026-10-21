@@ -35,6 +35,7 @@ Use the current Go server and plain JavaScript interface. Do not introduce a fro
 
 Preserve these product contracts unless the user explicitly changes them:
 
+- Network access is opt-in for each run: default `--host 127.0.0.1` (also accepting `localhost`), or `--host 0.0.0.0` for all IPv4 interfaces. Preserve the chosen host during port fallback. Network mode accepts IP-address URLs and keeps authentication, host validation, and cross-site/origin checks.
 - Standard users browse and search. Admin actions require server-side authentication as well as appropriate UI visibility. A hidden button is not authorization. Handle expired sessions without leaving usable edit controls behind.
 - The view order is Grid, Table, Organized, with Grid as the default. Keep physical album pages distinct from result pagination. Read the current page sizes rather than assuming one size for every view.
 - Album and box types stay fixed once saved. New unnumbered imports default to boxes; numbered imports can use paged albums. Existing destination types and an explicit import choice take precedence over automatic detection.

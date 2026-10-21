@@ -32,9 +32,14 @@ func run() (runErr error) {
 	}
 	data := flag.String("data", filepath.Join(home, ".soft-inventory"), "Local catalog directory")
 	port := flag.Int("port", 8765, "Local server port (0 selects an available port)")
+	host := flag.String("host", "127.0.0.1", "Listen address: 127.0.0.1 or localhost for this computer only; 0.0.0.0 for all IPv4 addresses")
 	noBrowser := flag.Bool("no-browser", false, "Do not open the browser automatically")
 	folder := flag.String("folder", "", "Image folder to scan, including subfolders")
 	flag.Parse()
+	listenHost, err := normalizeListenHost(*host)
+	if err != nil {
+		return err
+	}
 	directory, err := expandPath(*data)
 	if err != nil {
 		return err
@@ -63,19 +68,19 @@ func run() (runErr error) {
 			return err
 		}
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
-	if err != nil && *port == 8765 {
-		listener, err = net.Listen("tcp", "127.0.0.1:0")
-	}
+	listener, err := listenHTTP(listenHost, *port)
 	if err != nil {
 		return err
 	}
 	address := fmt.Sprintf("http://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
-	logEvent(catalog.logBase(), "DEBUG", "server_started", map[string]any{"address": address})
+	logEvent(catalog.logBase(), "DEBUG", "server_started", map[string]any{"address": address, "listen_address": listener.Addr().String()})
 	stopLogs := make(chan struct{})
 	defer close(stopLogs)
 	go catalog.maintainLogs(stopLogs)
 	fmt.Printf("Card Atlas: %s\nKeep this window open. Press Ctrl+C to stop.\n", address)
+	if listenHost == "0.0.0.0" {
+		fmt.Printf("Listening on all IPv4 addresses, port %d. Other devices should use this computer's network IP instead of localhost.\n", listener.Addr().(*net.TCPAddr).Port)
+	}
 	if catalog.data.Root != "" {
 		fmt.Printf("Catalog: %s\n", catalog.file)
 	} else {
@@ -89,7 +94,7 @@ func run() (runErr error) {
 			}
 		}()
 	}
-	server := &http.Server{Handler: catalog.handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Handler: catalog.handlerForHost(listenHost), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	return server.Serve(listener)
 }
 func main() {

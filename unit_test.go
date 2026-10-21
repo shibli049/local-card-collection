@@ -193,8 +193,8 @@ func TestUnitCatalogFormatAndLegacyDetection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "catalog.sqlite3"), []byte("legacy database"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openCatalog(directory); err == nil || !strings.Contains(err.Error(), "migrate_catalog.py") {
-		t.Fatalf("missing migration instruction: %v", err)
+	if _, err := openCatalog(directory); err == nil || !strings.Contains(err.Error(), "older catalog format") {
+		t.Fatalf("missing legacy catalog warning: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(directory, "catalog.json")); !os.IsNotExist(err) {
 		t.Fatal("legacy catalog silently replaced")
