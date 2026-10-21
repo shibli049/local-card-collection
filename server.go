@@ -93,6 +93,20 @@ func (c *Catalog) handlerForHost(listenHost string) http.Handler {
 				return
 			}
 			switch r.URL.Path {
+			case "/api/delete-selection":
+				var input struct {
+					Paths   []string `json:"paths"`
+					Folders []string `json:"folders"`
+				}
+				if err := decode(w, r, &input); err != nil {
+					badRequest(w, err)
+					return
+				}
+				if err := c.deleteSelection(input.Paths, input.Folders); err != nil {
+					badRequest(w, err)
+					return
+				}
+				writeJSON(w, 200, map[string]bool{"deleted": true})
 			case "/api/delete-album":
 				var input struct {
 					Folder string `json:"folder"`

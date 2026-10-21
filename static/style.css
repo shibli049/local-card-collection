@@ -63,3 +63,4 @@ aside{display:flex;flex-direction:column;padding-bottom:20px}.brand{flex-shrink:
 .tour-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .tour-actions button { padding: 8px 10px; font-size: 12px; }
 .tour-focus { outline: 3px solid #23795e !important; outline-offset: 4px; box-shadow: 0 0 0 7px #80d5b33b !important; }
+#deleteSelectionList { max-height: 25vh; overflow-y: auto; overflow-wrap: anywhere; padding-left: 24px; }

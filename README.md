@@ -50,6 +50,12 @@ Album covers use cached thumbnails and load as they approach the visible area. T
 
 Click an image to see its full preview and edit its name and description, optionally enter a price, then click **Save details**. Prices accept text such as `25.00 SEK` or `$10`, so the currency is explicit. Leave Price blank to remove it. Saved prices are visible on image cards, in the table, and in image details without signing in. Add multiple tags separated by commas, such as `Pokémon, Rare, Japanese`. Visitors can see names and tags, and search matches them too. Names and tags survive reloads and replacements; CSV exports join multiple tags with semicolons. Prices survive reloads, restarts, and replacements; a renamed copy starts without a price. Search matches every space-separated term across the relative path, description and position numbers. Typing a search resets album and physical-page filters to **All**, so it searches the whole collection by default. You can then choose an album or page to narrow the results.
 
+### Delete photos, albums and boxes
+
+Administrators can open a photo and choose **Delete photo**, or use **Select images** inside an album or box, click several photos, and choose **Delete selected photos**. In **Browse albums**, choose **Select albums / boxes**, select the folders to remove, then choose **Delete selected albums / boxes**. Review the selection and choose **Confirm deletion**, or **Cancel** to keep it.
+
+Deleting an album includes its nested folders and their contents. Deleting individual photos leaves the album or box in place. Files are moved into `.card-atlas-trash` inside the collection for recovery and excluded from reloads. A failed save restores the moved files; technical error details are recorded in `.log`.
+
 ### Rearrange photos and show empty positions
 
 Sign in, open an album, and choose **Organized**. For folder imports, the app infers the page, row and column counts from positioned filenames. **Album layout** lets an administrator set the full dimensions, including blank trailing pages or rows. Photos without positions stay available under **Without positions / boxes** until placed.

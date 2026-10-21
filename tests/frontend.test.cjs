@@ -585,3 +585,36 @@ test('folder tour follows the path field once the connection window is open', ()
   assert.equal(a.panel.hidden,true);
   assert.equal(a.get('folderDialog').open,true);
 });
+
+test('individual photo deletion requires confirmation and cancellation makes no request', async()=>{
+ const a=app();vm.runInContext('selected={path:"Box/a.jpg"};canLeaveDetail=()=>true;var calls=[];api=async(url,body)=>{calls.push({url,body});return {}};load=async()=>{};',a.context);
+ a.get('deleteImage').onclick();assert.equal(a.get('deleteSelectionDialog').open,true);assert.equal(a.read('calls.length'),0);
+ a.get('deleteSelectionCancel').onclick();assert.equal(a.get('deleteSelectionDialog').open,false);assert.equal(a.read('calls.length'),0);
+ a.get('deleteImage').onclick();await a.get('deleteSelectionForm').onsubmit({preventDefault(){}});
+ assert.deepEqual(a.read('calls[0]'),{url:'/api/delete-selection',body:{paths:['Box/a.jpg'],folders:[]}});
+ assert.equal(a.get('deleteSelectionDialog').open,false);
+});
+
+test('batch photo deletion retains selection on failure and prevents duplicate submissions',async()=>{
+ const a=app();vm.runInContext('selectingImages=true;selectedImages.set("Box/a.jpg",{path:"Box/a.jpg"});var finish,calls=0;api=()=>{calls++;return new Promise((resolve,reject)=>finish=reject)};',a.context);
+ a.get('deleteSelectedImages').onclick();const pending=a.get('deleteSelectionForm').onsubmit({preventDefault(){}});
+ await a.get('deleteSelectionForm').onsubmit({preventDefault(){}});a.get('deleteSelectionCancel').onclick();
+ assert.equal(a.read('calls'),1);assert.equal(a.get('deleteSelectionDialog').open,true);
+ vm.runInContext('finish(Error("Could not save. Try again."))',a.context);await pending;
+ assert.equal(a.read('selectedImages.size'),1);assert.equal(a.get('deleteSelectionError').textContent,'Could not save. Try again.');assert.equal(a.get('deleteSelectionConfirm').disabled,false);
+});
+
+test('album selection supports multiple tiles and viewers lose all deletion controls',()=>{
+ const a=app();vm.runInContext('state={mode:"albums",folders:[{path:"A",count:1},{path:"B",count:2}]};',a.context);
+ a.get('selectAlbums').onclick();let grid=a.get('library').children[0];grid.children[0].onclick();grid=a.get('library').children[0];grid.children[1].onclick();
+ assert.deepEqual(a.read('[...selectedAlbums]'),['A','B']);a.get('deleteSelectedAlbums').onclick();assert.deepEqual(a.read('pendingDeletion.folders'),['A','B']);
+ vm.runInContext('canEdit=false;applyAccess()',a.context);
+ assert.equal(a.get('deleteImage').hidden,true);assert.equal(a.get('deleteSelectedAlbums').hidden,true);assert.equal(a.get('deleteSelectionDialog').open,false);assert.equal(a.read('selectedAlbums.size'),0);
+});
+
+test('confirmed album batch sends all selected folders and clears selection on success',async()=>{
+ const a=app();vm.runInContext('selectedAlbums.add("A");selectedAlbums.add("B");var sent;api=async(url,body)=>{sent={url,body};return {}};load=async()=>{};',a.context);
+ a.get('deleteSelectedAlbums').onclick();await a.get('deleteSelectionForm').onsubmit({preventDefault(){}});
+ assert.deepEqual(a.read('sent'),{url:'/api/delete-selection',body:{paths:[],folders:['A','B']}});
+ assert.equal(a.read('selectedAlbums.size'),0);assert.equal(a.get('deleteSelectionDialog').open,false);assert.equal(a.read('browsingAlbums'),true);
+});

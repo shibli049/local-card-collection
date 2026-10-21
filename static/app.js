@@ -6,6 +6,47 @@ const el = (tag, text, cls) => {
   return node;
 };
 let canEdit = false;
+let selectingAlbums = false, deletingSelection = false, pendingDeletion = null;
+const selectedAlbums = new Set();
+function updateDeleteTools() {
+  $('selectAlbums').hidden = !canEdit || !browsingAlbums;
+  $('selectAlbums').textContent = selectingAlbums ? 'Done selecting albums' : 'Select albums / boxes';
+  $('selectAlbums').setAttribute('aria-pressed',String(selectingAlbums));
+  $('deleteSelectedAlbums').hidden = !canEdit || !browsingAlbums || !selectingAlbums;
+  $('deleteSelectedAlbums').disabled = !selectedAlbums.size;
+  $('deleteSelectedAlbums').textContent = `Delete selected albums / boxes (${selectedAlbums.size})…`;
+  $('deleteSelectedImages').hidden = !canEdit || browsingAlbums || !selectingImages;
+  $('deleteSelectedImages').disabled = !selectedImages.size;
+  $('deleteSelectedImages').textContent = `Delete selected photos (${selectedImages.size})…`;
+  $('deleteImage').hidden = !canEdit;
+}
+function openDeleteSelection(paths, folders) {
+  if (!canEdit || deletingSelection || !paths.length && !folders.length) return;
+  pendingDeletion = {paths:[...paths],folders:[...folders]};
+  $('deleteSelectionSummary').textContent = folders.length ? `Delete ${folders.length} selected albums / boxes and all their photos, including nested folders?` : `Delete ${paths.length} selected photo${paths.length===1?'':'s'}?`;
+  $('deleteSelectionList').replaceChildren(...[...folders,...paths].map(key=>el('li',key)));
+  $('deleteSelectionError').textContent=''; $('deleteSelectionDialog').showModal();
+}
+$('selectAlbums').onclick=()=>{if(!canEdit)return;selectingAlbums=!selectingAlbums;selectedAlbums.clear();updateDeleteTools();renderLibrary();};
+$('deleteSelectedAlbums').onclick=()=>openDeleteSelection([], [...selectedAlbums]);
+$('deleteSelectedImages').onclick=()=>openDeleteSelection([...selectedImages.keys()], []);
+$('deleteImage').onclick=()=>{if(selected && canLeaveDetail()) openDeleteSelection([selected.path],[]);};
+$('deleteSelectionCancel').onclick=()=>{if(!deletingSelection){$('deleteSelectionDialog').close();pendingDeletion=null;}};
+$('deleteSelectionDialog').addEventListener('cancel',event=>{if(deletingSelection)event.preventDefault();else pendingDeletion=null;});
+$('deleteSelectionForm').onsubmit=async event=>{
+  event.preventDefault();if(!canEdit || !pendingDeletion || deletingSelection)return;
+  const deletion=pendingDeletion;
+  deletingSelection=true;$('deleteSelectionConfirm').disabled=true;$('deleteSelectionCancel').disabled=true;
+  $('deleteSelectionError').textContent='';
+  try {
+    await api('/api/delete-selection',deletion);
+    pendingDeletion=null;$('deleteSelectionDialog').close();$('detailDialog').close();$('preview').removeAttribute('src');selected=null;
+    selectedImages.clear();selectedAlbums.clear();selectingImages=false;selectingAlbums=false;cancelMove();page=1;
+    if(deletion.folders.length){folder='';sheet='';browsingAlbums=true;}
+    await load();notify('Deleted. Files are kept in the local recovery folder.');
+  } catch(error){$('deleteSelectionError').textContent=userErrorMessage(error);}
+  finally{deletingSelection=false;$('deleteSelectionConfirm').disabled=false;$('deleteSelectionCancel').disabled=false;updateSelectionTools();}
+};
 let deletingAlbum = false, albumToDelete = '';
 async function openDeleteAlbum(path) {
   if (!canEdit || !path || path === '.' || deletingAlbum) return;
@@ -37,6 +78,7 @@ $('deleteAlbumForm').onsubmit = async event => {
 let selectingImages = false, transferring = false;
 const selectedImages = new Map();
 function updateSelectionTools() {
+  updateDeleteTools();
   $('selectionTools').hidden = !canEdit || browsingAlbums;
   $('selectImages').textContent = selectingImages ? 'Done selecting' : 'Select images';
   $('selectImages').setAttribute('aria-pressed', String(selectingImages));
@@ -144,7 +186,7 @@ function applyAccess() {
   $('layoutOpen').hidden = !canEdit || !folder || browsingAlbums || currentAlbum()?.mode !== 'paged';
   $('deleteAlbumOpen').hidden = !canEdit || !folder || folder === '.' || browsingAlbums;
   $('moveTools').hidden = !canEdit || !movingCard;
-  if (!canEdit) { window.adminTour?.stop(); selectingImages=false; selectedImages.clear(); movingCard=null; $('deleteAlbumDialog').close(); $('transferDialog').close(); $('layoutDialog').close(); $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
+  if (!canEdit) { window.adminTour?.stop(); selectingImages=false; selectedImages.clear(); selectingAlbums=false; selectedAlbums.clear(); pendingDeletion=null; $('deleteSelectionDialog').close(); movingCard=null; $('deleteAlbumDialog').close(); $('transferDialog').close(); $('layoutDialog').close(); $('importDialog').close(); $('folderDialog').close(); $('exportDialog').close(); }
   updateSelectionTools();
 }
 async function refreshAccess() { const session = await api('/api/session'); canEdit = session.authenticated; applyAccess(); }
@@ -340,7 +382,20 @@ function renderLibrary() {
       const button = el('button', undefined, 'album-tile'); button.type = 'button';
       button.append(album.cover ? thumbnail(album.cover,true) : el('div', album.album?.mode === 'box' ? '□' : '▱', 'album-tile-icon'), el('h2',(album.album?.mode === 'box' ? '📦 ' : '📖 ') + folderName(album.path)),el('p',`${album.count} cards`));
       if (album.album?.mode === 'paged') button.append(el('span',`${album.album.pages} pages · ${album.album.rows} × ${album.album.columns}`, 'badge'));
-      button.onclick = () => chooseFolder(album.path); grid.append(button);
+      if (canEdit && selectingAlbums && album.path !== '.') {
+        button.setAttribute('aria-pressed',String(selectedAlbums.has(album.path)));
+        button.classList.toggle('selected-image',selectedAlbums.has(album.path));
+        button.append(el('span',selectedAlbums.has(album.path)?'✓ Selected':'Select album / box','selection-label'));
+      }
+      button.onclick = () => {
+        if(canEdit && selectingAlbums) {
+          if(album.path==='.') {notify('The collection root cannot be deleted.',true);return;}
+          if(selectedAlbums.has(album.path))selectedAlbums.delete(album.path);
+          else if(selectedAlbums.size<1000)selectedAlbums.add(album.path);
+          else notify('Select up to 1000 albums or boxes.',true);
+          updateDeleteTools();renderLibrary();
+        } else chooseFolder(album.path);
+      }; grid.append(button);
     }
     library.append(grid); return;
   }
