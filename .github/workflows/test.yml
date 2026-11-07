@@ -21,6 +21,8 @@ jobs:
       - name: Drag-and-drop and import selection tests
         run: node --test tests/frontend.test.cjs
       - name: Unit, handler, and HTTP integration tests
+        # bash keeps PowerShell from splitting -coverprofile=coverage.out on Windows.
+        shell: bash
         run: go test -race -coverprofile=coverage.out ./...
       - uses: actions/upload-artifact@v4
         with:

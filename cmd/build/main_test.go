@@ -76,7 +76,14 @@ func TestExecutableCopyReplacesFileInsteadOfOverwritingIt(t *testing.T) {
 	if err := os.WriteFile(destination, []byte("old executable"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(destination)
+	// Stat through an open handle: on Windows, os.Stat defers reading the file
+	// identity until SameFile, which would then see the replacement file.
+	file, err := os.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := file.Stat()
+	file.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

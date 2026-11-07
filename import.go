@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -38,7 +39,8 @@ func validAlbumPath(name string) bool {
 	return !strings.Contains(name, `\`)
 }
 func importedName(original string, index int, album Album) string {
-	name := filepath.Base(strings.ReplaceAll(original, `\`, "/"))
+	// path.Base, not filepath.Base: Windows would treat "a:" as a drive letter.
+	name := path.Base(strings.ReplaceAll(original, `\`, "/"))
 	extension := strings.ToLower(filepath.Ext(name))
 	stem := strings.Trim(invalidName.ReplaceAllString(strings.TrimSuffix(name, filepath.Ext(name)), "_"), " .")
 	if len(stem) > 140 {
